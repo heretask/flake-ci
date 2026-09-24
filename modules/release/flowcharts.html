@@ -1,0 +1,428 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Release workflows and state machine</title>
+<style>
+  :root {
+    --bg: #0f1218; --panel: #171c26; --border: #2a3242; --fg: #d7dee9;
+    --muted: #8b96a8; --accent: #5aa9f7; --ok: #58c586; --err: #e0706e; --warn: #e3b34c;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { padding: 18px 24px 0; }
+  header h1 { margin: 0 0 4px; font-size: 20px; }
+  header p { margin: 0 0 14px; color: var(--muted); font-size: 13px; }
+  code, pre { font-family: ui-monospace, "JetBrains Mono", Menlo, monospace; }
+  nav { display: flex; gap: 6px; padding: 0 24px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+  nav button { background: none; border: none; border-bottom: 2px solid transparent;
+    color: var(--muted); padding: 9px 14px; font: inherit; font-size: 14px; cursor: pointer; }
+  nav button:hover { color: var(--fg); }
+  nav button.active { color: var(--accent); border-bottom-color: var(--accent); }
+  main { padding: 18px 24px 40px; }
+  .tab { display: none; }
+  .tab.active { display: block; }
+  .tab > p.blurb { color: var(--muted); max-width: 72ch; margin: 0 0 12px; }
+  .tab code { color: var(--accent); }
+
+  .viewport { position: relative; border: 1px solid var(--border); border-radius: 8px;
+    background: var(--panel); overflow: hidden; height: 66vh; min-height: 420px; }
+  .canvas { position: absolute; inset: 0; display: flex; align-items: center;
+    justify-content: center; transform-origin: 0 0; cursor: grab; }
+  .canvas:active { cursor: grabbing; }
+  .canvas .mermaid { margin: 0; width: 100%; height: 100%; }
+  .canvas svg { width: 100%; height: 100%; max-width: none !important; }
+  .zoombar { position: absolute; top: 10px; right: 10px; z-index: 5; display: flex; gap: 4px; }
+  .zoombar button { width: 32px; height: 32px; border-radius: 6px; border: 1px solid var(--border);
+    background: var(--bg); color: var(--fg); font-size: 16px; cursor: pointer; }
+  .zoombar button:hover { border-color: var(--accent); }
+  .hint { position: absolute; bottom: 8px; left: 12px; color: var(--muted); font-size: 12px;
+    z-index: 5; pointer-events: none; }
+
+  /* scenario stepper */
+  .scenario-picker { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
+  .scenario-picker button { border: 1px solid var(--border); background: var(--panel);
+    color: var(--fg); border-radius: 6px; padding: 7px 12px; font: inherit; font-size: 13px; cursor: pointer; }
+  .scenario-picker button.active { border-color: var(--accent); color: var(--accent); }
+  .stepper { border: 1px solid var(--border); border-radius: 8px; background: var(--panel); padding: 16px 18px; }
+  .stepper h3 { margin: 0 0 2px; font-size: 16px; }
+  .stepper .sub { color: var(--muted); font-size: 13px; margin: 0 0 12px; }
+  .history { background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+    padding: 12px 14px; overflow-x: auto; white-space: pre; font-family: ui-monospace, Menlo, monospace;
+    font-size: 13.5px; line-height: 1.7; }
+  .history .new { color: var(--warn); font-weight: 600; }
+  .history .tag { color: var(--accent); }
+  .cmd { margin-top: 12px; }
+  .cmd .invocation { color: var(--muted); font-size: 13px; }
+  .cmd .invocation code { color: var(--fg); background: var(--bg); border: 1px solid var(--border);
+    border-radius: 4px; padding: 1px 6px; }
+  .result { margin-top: 6px; border-radius: 6px; padding: 9px 12px; font-family: ui-monospace, Menlo, monospace;
+    font-size: 13px; white-space: pre-wrap; border: 1px solid; }
+  .result.ok  { border-color: #2c5c41; background: #14241c; color: var(--ok); }
+  .result.err { border-color: #6b3231; background: #2a1817; color: var(--err); }
+  .result.warn{ border-color: #6b5626; background: #292112; color: var(--warn); }
+  .note { margin-top: 10px; color: var(--muted); font-size: 13.5px; max-width: 78ch; }
+  .note strong { color: var(--fg); }
+  .stepnav { display: flex; align-items: center; gap: 12px; margin-top: 16px; }
+  .stepnav button { border: 1px solid var(--border); background: var(--bg); color: var(--fg);
+    border-radius: 6px; padding: 7px 16px; font: inherit; cursor: pointer; }
+  .stepnav button:disabled { opacity: .35; cursor: default; }
+  .stepnav button:not(:disabled):hover { border-color: var(--accent); }
+  .dots { display: flex; gap: 6px; margin-left: auto; }
+  .dots span { width: 9px; height: 9px; border-radius: 50%; background: var(--border); cursor: pointer; }
+  .dots span.on { background: var(--accent); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Release workflows and state machine</h1>
+  <p>Release state comes from repository history, tags, commit policy, and prepared files.
+     Examples use the default <code>VERSION</code> and <code>CHANGELOG.md</code> paths. Both filenames are configurable.</p>
+</header>
+<nav id="tabs">
+  <button data-tab="target" class="active">Target calculation</button>
+  <button data-tab="rc">release rc</button>
+  <button data-tab="stable">release stable</button>
+  <button data-tab="lifecycle">Lifecycle</button>
+  <button data-tab="workflows">GitHub workflows</button>
+  <button data-tab="scenarios">Scenarios (step through)</button>
+</nav>
+<main>
+
+<section class="tab active" id="tab-target">
+  <p class="blurb">The bump baseline is the newest stable tag reachable from HEAD. Preparation parses Cog output once for both the strongest commit impact and the changelog, then computes the target and expected files together.</p>
+  <div class="viewport">
+    <div class="zoombar"><button data-z="in">+</button><button data-z="out">−</button><button data-z="fit">⤢</button></div>
+    <div class="canvas"><pre class="mermaid">
+flowchart TD
+    A["collect tags reachable from HEAD<br/>(merge-base --is-ancestor)"] --> B{any stable vX.Y.Z tag?}
+    B -- no --> C["range: all commits"]
+    B -- yes --> D["baseline = max stable<br/>range: stable..HEAD"]
+    C --> E["cog check:<br/>reject malformed commits"]
+    D --> E
+    E --> L["parse Cog output once<br/>for version impact and changelog"]
+    L --> M{first release?}
+    M -- yes --> K["target = configured VERSION"]
+    M -- no --> F{strongest impact in range?}
+    F -- "BREAKING!" --> G[bump major]
+    F -- "feat" --> H[bump minor]
+    F -- "fix / improvement / perf<br/>refactor / revert" --> I[bump patch]
+    F -- "none (chore, docs, ci, …)" --> J["target = latest stable<br/>no new release after chore-only commits"]
+    style J stroke:#e3b34c,color:#e3b34c
+    style K stroke:#58c586
+    </pre></div>
+    <div class="hint">drag to pan · wheel or +/− to zoom</div>
+  </div>
+</section>
+
+<section class="tab" id="tab-rc">
+  <p class="blurb"><code>release rc</code> compares VERSION and CHANGELOG.md with the expected preparation bytes. This detects both target changes and stale changelog content. An existing RC at HEAD is reused; otherwise, the target must differ from the latest stable release.</p>
+  <div class="viewport">
+    <div class="zoombar"><button data-z="in">+</button><button data-z="out">−</button><button data-z="fit">⤢</button></div>
+    <div class="canvas"><pre class="mermaid">
+flowchart TD
+    A[release rc] --> B{tree dirty?}
+    B -- yes --> X1["ERROR: working tree is dirty"]
+    B -- no --> C["compute target and expected files once<br/>from stable..HEAD"]
+    C --> D{"VERSION and CHANGELOG<br/>match expected bytes?"}
+    D -- no --> X2["ERROR: prepared files differ<br/>run prepare and commit first"]
+    D -- yes --> E{"rc tag for target<br/>pointing at HEAD?"}
+    E -- yes --> F["idempotent: print highest<br/>matching rc, no new tag"]
+    E -- no --> H{"target == latest stable?<br/>(nothing impactful since release)"}
+    H -- yes --> X3["ERROR: nothing to release:<br/>no release-impacting commits<br/>since vX.Y.Z"]
+    H -- no --> G["tag vT-rc.(maxN+1)<br/>N scans ALL rc tags for target,<br/>even unreachable ones"]
+    style X1 stroke:#e0706e,color:#e0706e
+    style X2 stroke:#e0706e,color:#e0706e
+    style X3 stroke:#e0706e,color:#e0706e
+    style F stroke:#58c586
+    style G stroke:#58c586
+    </pre></div>
+    <div class="hint">drag to pan · wheel or +/− to zoom</div>
+  </div>
+</section>
+
+<section class="tab" id="tab-stable">
+  <p class="blurb">Promotion uses VERSION and a matching RC at HEAD without recalculating release content. A direct stable release calculates the target and checks the prepared files. Both paths share tag collision checks and tag creation.</p>
+  <div class="viewport">
+    <div class="zoombar"><button data-z="in">+</button><button data-z="out">−</button><button data-z="fit">⤢</button></div>
+    <div class="canvas"><pre class="mermaid">
+flowchart TD
+    A[release stable] --> B{tree dirty?}
+    B -- yes --> X1["ERROR: working tree is dirty"]
+    B -- no --> C{"RC for VERSION<br/>pointing at HEAD?"}
+    C -- yes --> D["target = VERSION<br/>reuse the RC commit"]
+    C -- no --> E["calculate target and expected files<br/>check prepared bytes"]
+    E -- "not ready" --> X3["ERROR: VERSION or<br/>CHANGELOG mismatch"]
+    D --> G{vTarget tag exists?}
+    E -- ready --> G
+    G -- no --> H["tag vTarget at HEAD"]
+    H --> F["print vTarget"]
+    G -- "at HEAD" --> F
+    G -- elsewhere --> X2["ERROR: already exists<br/>on a different commit"]
+    style X1 stroke:#e0706e,color:#e0706e
+    style X2 stroke:#e0706e,color:#e0706e
+    style X3 stroke:#e0706e,color:#e0706e
+    style H stroke:#58c586
+    style F stroke:#58c586
+    </pre></div>
+    <div class="hint">drag to pan · wheel or +/− to zoom</div>
+  </div>
+</section>
+
+<section class="tab" id="tab-lifecycle">
+  <p class="blurb">Full release lifecycle across cycles, including target escalation and the guarded chore-only state.</p>
+  <div class="viewport">
+    <div class="zoombar"><button data-z="in">+</button><button data-z="out">−</button><button data-z="fit">⤢</button></div>
+    <div class="canvas"><pre class="mermaid">
+stateDiagram-v2
+    [*] --> Unprepared: commits land after stable
+    Unprepared --> Prepared: prepare + commit (VERSION=target, CHANGELOG written)
+    Prepared --> RC: rc → vT-rc.N
+    RC --> RC: rc at same HEAD (idempotent)
+    RC --> Unprepared: fix keeps target, feat changes target and resets RC numbering
+    RC --> Stable: stable at rc commit → vT (trusts VERSION + rc)
+    Prepared --> Stable: stable without RC, prepared bytes must match
+    Stable --> Unprepared: next impactful commit (new baseline = vT)
+    Unprepared --> Unprepared: chore/docs only, target stays at latest stable
+    </pre></div>
+    <div class="hint">drag to pan · wheel or +/− to zoom</div>
+  </div>
+</section>
+
+<section class="tab" id="tab-workflows">
+  <p class="blurb">Run <code>Release</code> with the <code>rc</code> or <code>stable</code> channel. If preparation changes files, it opens a PR and stops. Merge the PR, wait for Nix checks, then rerun <code>Release</code> with the desired channel. After pushing the tag and channel, the job publishes a GitHub Release with the changelog notes. RCs are prereleases. Their notes show changes since the highest earlier RC number for the same version whose commit is an ancestor of the checkout. Stable releases and RCs without an eligible predecessor use the full stable-version section. Channel pushes notify Ops independently.</p>
+  <div class="viewport">
+    <div class="zoombar"><button data-z="in">+</button><button data-z="out">−</button><button data-z="fit">⤢</button></div>
+    <div class="canvas"><pre class="mermaid">
+flowchart TD
+    A["Run Release<br/>channel: rc (default) or stable"] --> B["Prepare job: select main SHA<br/>prepare VERSION and CHANGELOG"]
+    B --> C{"Prepared files already match?"}
+    C -- "yes: ready=true and selected SHA" --> F["Release job uses selected SHA<br/>and requested channel"]
+    C -- no --> D["create-pull-request opens or updates PR<br/>branch: automation/prepare-release<br/>release job is skipped"]
+    D --> E["Operator merges PR and waits for Nix success"]
+    E -- "operator reruns Release" --> A
+    F --> G["Verify exact SHA passed Nix<br/>and remains reachable from main"]
+    G --> H["Run release rc or stable at that SHA<br/>allocate RC number now"]
+    H --> I["Atomically publish tag and fast-forward channel<br/>RC: unstable / stable release: stable"]
+    I --> K["Publish GitHub Release with changelog notes<br/>on failure, confirm it is already published"]
+    I -- "channel changed" --> J["Push workflow on stable or unstable<br/>dispatch channel and pushed SHA to Ops"]
+    style I stroke:#58c586
+    style J stroke:#5aa9f7
+    </pre></div>
+    <div class="hint">drag to pan · wheel or +/− to zoom</div>
+  </div>
+  <p class="note">The shared <code>release-request</code> concurrency group allows one release request to run at a time without canceling the running request. Each run rechecks <code>main</code>. PR merges and Nix completions never start a release. Preparation PRs have no separate drift check. A failed notification can be retried independently. Unchanged channels, branch deletions, and revisions without the notification workflow do not notify Ops.</p>
+</section>
+
+<section class="tab" id="tab-scenarios">
+  <p class="blurb">Step through release histories and expected command results. Yellow marks what changed. These examples run the local CLI; the GitHub workflow always selects the current main revision.</p>
+  <div class="scenario-picker" id="picker"></div>
+  <div class="stepper">
+    <h3 id="sc-title"></h3>
+    <p class="sub" id="sc-sub"></p>
+    <div class="history" id="sc-history"></div>
+    <div class="cmd" id="sc-cmd" hidden>
+      <div class="invocation" id="sc-invocation"></div>
+      <div class="result" id="sc-result"></div>
+    </div>
+    <div class="note" id="sc-note"></div>
+    <div class="stepnav">
+      <button id="prev">← Prev</button>
+      <button id="next">Next →</button>
+      <div class="dots" id="dots"></div>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<script type="module">
+import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+mermaid.initialize({
+  startOnLoad: false, theme: "dark", securityLevel: "loose",
+  themeVariables: { fontFamily: "ui-monospace, Menlo, monospace", fontSize: "14px" },
+});
+
+/* tabs — diagrams render lazily: mermaid cannot measure text inside display:none */
+const rendered = new Set();
+async function renderTab(tab) {
+  if (rendered.has(tab.id)) return;
+  rendered.add(tab.id);
+  const nodes = tab.querySelectorAll(".mermaid");
+  if (nodes.length) await mermaid.run({ nodes });
+}
+const nav = document.getElementById("tabs");
+nav.addEventListener("click", (e) => {
+  const btn = e.target.closest("button"); if (!btn) return;
+  nav.querySelectorAll("button").forEach(b => b.classList.toggle("active", b === btn));
+  document.querySelectorAll(".tab").forEach(t => {
+    const on = t.id === "tab-" + btn.dataset.tab;
+    t.classList.toggle("active", on);
+    if (on) renderTab(t);
+  });
+});
+renderTab(document.querySelector(".tab.active"));
+
+/* pan + zoom per viewport */
+for (const vp of document.querySelectorAll(".viewport")) {
+  const canvas = vp.querySelector(".canvas");
+  let s = 1, x = 0, y = 0;
+  const apply = () => canvas.style.transform = `translate(${x}px, ${y}px) scale(${s})`;
+  const zoom = (f, cx, cy) => {
+    const ns = Math.min(4, Math.max(0.25, s * f));
+    const r = vp.getBoundingClientRect();
+    cx = (cx ?? r.width / 2); cy = (cy ?? r.height / 2);
+    x = cx - (cx - x) * (ns / s); y = cy - (cy - y) * (ns / s); s = ns; apply();
+  };
+  vp.querySelector('[data-z="in"]').onclick = () => zoom(1.25);
+  vp.querySelector('[data-z="out"]').onclick = () => zoom(0.8);
+  vp.querySelector('[data-z="fit"]').onclick = () => { s = 1; x = 0; y = 0; apply(); };
+  vp.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    const r = vp.getBoundingClientRect();
+    zoom(e.deltaY < 0 ? 1.12 : 0.89, e.clientX - r.left, e.clientY - r.top);
+  }, { passive: false });
+  let drag = null;
+  canvas.addEventListener("pointerdown", (e) => {
+    drag = { px: e.clientX, py: e.clientY }; canvas.setPointerCapture(e.pointerId);
+  });
+  canvas.addEventListener("pointermove", (e) => {
+    if (!drag) return;
+    x += e.clientX - drag.px; y += e.clientY - drag.py;
+    drag = { px: e.clientX, py: e.clientY }; apply();
+  });
+  canvas.addEventListener("pointerup", () => drag = null);
+}
+
+/* Release history examples and expected command output. */
+const T = (t) => `<span class="tag">${t}</span>`;
+const N = (t) => `<span class="new">${t}</span>`;
+const scenarios = [
+  {
+    name: "1 · Happy patch cycle",
+    sub: "fix → prepare → rc → promote; rc is idempotent at the same HEAD",
+    steps: [
+      { h: `${T("v1.0.0")} ── fix ── P(1.0.1)`,
+        cmd: "release rc", res: "v1.0.1-rc.1", kind: "ok",
+        note: "Prepare commit P wrote VERSION=1.0.1 and the expected changelog section. The files match, so the first RC for target 1.0.1 is created." },
+      { h: `${T("v1.0.0")} ── fix ── P(1.0.1) ${T("[v1.0.1-rc.1]")}`,
+        cmd: "release rc   (re-run, same HEAD)", res: "v1.0.1-rc.1", kind: "ok",
+        note: "Idempotent: an rc for the target already points at HEAD, so it is printed and no new tag is created." },
+      { h: `${T("v1.0.0")} ── fix ── P(1.0.1) ${T("[v1.0.1-rc.1]")}`,
+        cmd: "release stable", res: "v1.0.1", kind: "ok",
+        note: "An RC for VERSION points at HEAD. Promotion tags that commit v1.0.1 without recalculating its release content." },
+    ],
+  },
+  {
+    name: "2 · Bug found in rc.1",
+    sub: "fix lands mid-cycle with the same target → counter increments",
+    steps: [
+      { h: `${T("v1.1.0")} ── fix ── P(1.1.1) ${T("[v1.1.1-rc.1]")} ── ${N("fix (bug in rc.1)")}`,
+        cmd: "release rc   (no re-prepare)", res: "release: CHANGELOG.md does not match calculated prepare output", kind: "err",
+        note: "The new fix changed the changelog body; byte-exact readiness check fails. Target is still 1.1.1." },
+      { h: `${T("v1.1.0")} ── fix ── P(1.1.1) ${T("[rc.1]")} ── fix ── ${N("P(1.1.1)′")}`,
+        cmd: "release rc", res: "v1.1.1-rc.2", kind: "ok",
+        note: "Same target ⇒ rc counter increments. rc.1 stays on its own commit." },
+      { h: `${T("v1.1.0")} ── fix ── P(1.1.1) ${T("[rc.1]")} ── fix ── P(1.1.1)′ ${T("[v1.1.1-rc.2]")}`,
+        cmd: "release stable", res: "v1.1.1", kind: "ok",
+        note: "rc.2 promoted; v1.1.1 pins the exact tested commit." },
+    ],
+  },
+  {
+    name: "3 · feat lands mid patch-rc cycle ★",
+    sub: "target escalation: the machine refuses to continue the patch cycle",
+    steps: [
+      { h: `${T("v1.0.0")} ── fix ── P(1.0.1) ${T("[v1.0.1-rc.1]")} ── ${N("feat")} ── HEAD`,
+        cmd: "release status",
+        res: "latest stable: 1.0.0\ncalculated target: 1.1.0\nVERSION target: 1.0.1\ncurrent matching RC: none\nnext RC: v1.1.0-rc.1", kind: "warn",
+        note: "Target is re-measured from <strong>stable</strong>, never from the last rc — the feat escalates it to 1.1.0 while VERSION still says 1.0.1." },
+      { h: `${T("v1.0.0")} ── fix ── P(1.0.1) ${T("[rc.1]")} ── feat ── HEAD`,
+        cmd: "release rc", res: "release: VERSION 1.0.1 does not match calculated prepare output for 1.1.0", kind: "err",
+        note: "The prepared files must match target 1.1.0 before releasing. <code>release stable</code> fails with the same error because there is no matching RC at HEAD." },
+      { h: `${T("v1.0.0")} ── fix ── P(1.0.1) ${T("[rc.1]")} ── feat ── ${N("P(1.1.0)")}`,
+        cmd: "release rc", res: "v1.1.0-rc.1", kind: "ok",
+        note: "Recovery: re-prepare rewrites VERSION to 1.1.0 (changelog section renamed too). Counter <strong>resets to 1</strong> because the target changed. v1.0.1-rc.* are orphaned; 1.0.1 will simply never exist on this line." },
+      { h: `${T("v1.0.0")} ── fix ── P(1.0.1) ${T("[rc.1]")} ◄── ${N("checkout old rc commit")}\n                     └─ feat ── P(1.1.0) ${T("[v1.1.0-rc.1]")}`,
+        cmd: "release stable   (at the old v1.0.1-rc.1 commit)", res: "v1.0.1", kind: "ok",
+        note: "The local CLI can promote the old RC from its own commit using VERSION=1.0.1, without recalculating the target. Main must then re-prepare because v1.0.1 becomes the latest reachable stable tag. The GitHub workflow has no old-revision selector." },
+    ],
+  },
+  {
+    name: "4 · Chore-only commits (guarded)",
+    sub: "target == latest stable: nothing to release, both commands refuse",
+    steps: [
+      { h: `${T("v1.1.1")} ── ${N("chore")} ── HEAD`,
+        cmd: "release status",
+        res: "latest stable: 1.1.1\ncalculated target: 1.1.1\nVERSION target: 1.1.1\ncurrent matching RC: none\nnext RC: none (nothing to release since v1.1.1)", kind: "warn",
+        note: "The target stays at the latest stable. Preparation leaves the files unchanged, and status reports no next RC." },
+      { h: `${T("v1.1.1")} ── chore ── HEAD`,
+        cmd: "release stable", res: "release: v1.1.1 already exists on a different commit", kind: "err",
+        note: "Nothing to release — no bad stable can ship." },
+      { h: `${T("v1.1.1")} ── chore ── HEAD`,
+        cmd: "release rc", res: "release: nothing to release: no release-impacting commits since v1.1.1", kind: "err",
+        note: "An RC requires a target newer than the latest stable. Rerunning at the unchanged promoted RC commit still prints its existing RC tag." },
+    ],
+  },
+  {
+    name: "5 · Collisions & misc",
+    sub: "tag collisions, dirty tree, branch visibility",
+    steps: [
+      { h: `${T("v1.1.1")} ── fix ── P(1.1.2)  ${N("(v1.1.2 tagged on wrong commit by someone)")}`,
+        cmd: "release stable", res: "release: v1.1.2 already exists on a different commit", kind: "err",
+        note: "A stable tag on a different commit is a hard error on both the promotion and the direct path. Same tag at HEAD ⇒ idempotent print instead." },
+      { h: `${T("v1.1.1")} ── fix ── P(1.1.2) + ${N("uncommitted changes")}`,
+        cmd: "release rc  /  release stable", res: "release: working tree is dirty", kind: "err",
+        note: "Both commands refuse a dirty tree before doing anything else." },
+      { h: `main:   ${T("v1.1.1")} ── … ── HEAD\nbranch: ${T("v2.0.0")} (unreachable)`,
+        cmd: "—", res: "latest stable: 1.1.1  (v2.0.0 ignored)", kind: "ok",
+        note: "Unreachable stable tags do not affect the baseline. RC numbering scans all locally available RC tags for a target, so numbers on other branches remain reserved. Promotion requires the RC tag to point at HEAD." },
+      { h: `(empty repo) ── chore ── feat ── P(1.0.0)`,
+        cmd: "release rc  →  release stable", res: "v1.0.0-rc.1  →  v1.0.0", kind: "ok",
+        note: "No stable tag at all ⇒ the initial target comes from VERSION, regardless of impact strength. This example uses VERSION=1.0.0." },
+    ],
+  },
+];
+
+let sIdx = 0, stepIdx = 0;
+const picker = document.getElementById("picker");
+scenarios.forEach((sc, i) => {
+  const b = document.createElement("button");
+  b.textContent = sc.name;
+  b.onclick = () => { sIdx = i; stepIdx = 0; render(); };
+  picker.appendChild(b);
+});
+const el = (id) => document.getElementById(id);
+function render() {
+  const sc = scenarios[sIdx], st = sc.steps[stepIdx];
+  picker.querySelectorAll("button").forEach((b, i) => b.classList.toggle("active", i === sIdx));
+  el("sc-title").textContent = sc.name;
+  el("sc-sub").textContent = sc.sub + ` — step ${stepIdx + 1}/${sc.steps.length}`;
+  el("sc-history").innerHTML = st.h;
+  el("sc-cmd").hidden = false;
+  el("sc-invocation").innerHTML = `$ <code>${st.cmd}</code>`;
+  const r = el("sc-result");
+  r.textContent = st.res; r.className = "result " + st.kind;
+  el("sc-note").innerHTML = st.note;
+  el("prev").disabled = stepIdx === 0;
+  el("next").disabled = stepIdx === sc.steps.length - 1;
+  const dots = el("dots"); dots.innerHTML = "";
+  sc.steps.forEach((_, i) => {
+    const d = document.createElement("span");
+    d.classList.toggle("on", i === stepIdx);
+    d.onclick = () => { stepIdx = i; render(); };
+    dots.appendChild(d);
+  });
+}
+el("prev").onclick = () => { if (stepIdx > 0) { stepIdx--; render(); } };
+el("next").onclick = () => { if (stepIdx < scenarios[sIdx].steps.length - 1) { stepIdx++; render(); } };
+document.addEventListener("keydown", (e) => {
+  if (!document.getElementById("tab-scenarios").classList.contains("active")) return;
+  if (e.key === "ArrowRight") el("next").click();
+  if (e.key === "ArrowLeft") el("prev").click();
+});
+render();
+</script>
+</body>
+</html>
