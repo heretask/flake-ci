@@ -68,6 +68,7 @@ Then run `nix run .#write-files` and commit the generated files.
 | `ci.release.branches.{rc,stable}` | `"unstable"`, `"stable"` | Channel branches. |
 | `ci.release.appToken.{clientIdVariable,privateKeySecret}` | — | GitHub App credentials the release workflows use. |
 | `ci.release.notify.{repository,eventType}` | `null` | `repository_dispatch` to another repository when a channel branch moves. |
+| `ci.release.stableApproval.{context,creator}` | `null` | Stable promotes the newest RC reachable from `main` only if `creator`'s newest `context` commit status on it is `success`. |
 | `ci.nixFormat.{enable,paths,excludes}` | off | treefmt Nix formatters and `checks.treefmt` over `paths`. |
 
 Every workflow runs Nix with `--option accept-flake-config false`.

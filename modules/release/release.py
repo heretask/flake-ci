@@ -397,6 +397,20 @@ def next_rc_tag(tags: Sequence[str], target: Version) -> str:
     return f"v{target}-rc.{n}"
 
 
+def latest_rc(root: Path, tags: Sequence[str]) -> str | None:
+    found: list[tuple[tuple[int, int, int], int, str]] = []
+    for tag in tags:
+        parsed = parse_rc_tag(tag)
+        if parsed is None:
+            continue
+        version, n = parsed
+        if reachable_from_head(root, peel_tag(root, tag)):
+            found.append((version.tuple, n, tag))
+    if not found:
+        return None
+    return max(found)[2]
+
+
 def collect_status(root: Path, config: Config) -> Status:
     tags = list_tags(root)
     latest = latest_stable(root, tags)
@@ -501,6 +515,14 @@ def cmd_rc(root: Path, config: Config) -> int:
     return 0
 
 
+def cmd_candidate(root: Path) -> int:
+    tag = latest_rc(root, list_tags(root))
+    if tag is None:
+        raise ReleaseError("no release candidate reachable from HEAD")
+    print(tag)
+    return 0
+
+
 def cmd_stable(root: Path, config: Config) -> int:
     if is_dirty(root):
         raise ReleaseError("working tree is dirty")
@@ -508,9 +530,7 @@ def cmd_stable(root: Path, config: Config) -> int:
     version = read_version(root, config)
     head = head_sha(root)
     if not matching_rc(root, tags, version, head):
-        status = collect_status(root, config)
-        require_ready(status)
-        version = status.calculated_target
+        raise ReleaseError(f"HEAD is not a release candidate for {version}; stable only promotes an RC commit")
     tag = f"v{version}"
     if tag in tags:
         if peel_tag(root, tag) != head:
@@ -528,6 +548,7 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("status")
     sub.add_parser("rc")
+    sub.add_parser("candidate")
     sub.add_parser("stable")
     notes = sub.add_parser("notes")
     notes.add_argument("tag")
@@ -549,6 +570,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return cmd_prepare(root, config, args.check)
         if args.command == "rc":
             return cmd_rc(root, config)
+        if args.command == "candidate":
+            return cmd_candidate(root)
         if args.command == "stable":
             return cmd_stable(root, config)
         raise ReleaseError(f"unknown command {args.command}")

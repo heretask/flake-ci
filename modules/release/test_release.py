@@ -151,33 +151,34 @@ class ReleaseLifecycleTest(unittest.TestCase):
         self.assertEqual(status.next_rc, "v1.1.0-rc.1")
         self.assertIsNone(status.matching_rc)
 
-    def test_direct_stable(self):
+    def test_stable_requires_rc_at_head(self):
         tag(self.repo, "v1.0.0")
         commit_file(self.repo, "fix: one")
         prepare_and_commit(self.repo, "chore: prepare 1.0.1")
-        sha = head(self.repo)
         before = self.snapshot_release_files()
-        self.assertEqual(main(["stable"]), 0)
-        after = self.snapshot_release_files()
-        self.assertEqual(after[:2], before[:2])
-        self.assertEqual(after[2][0], before[2][0])
-        self.assertEqual(main(["stable"]), 0)
-        self.assertEqual(self.snapshot_release_files(), after)
-        self.assertEqual(head(self.repo), sha)
-        self.assertEqual(run(["git", "rev-parse", "v1.0.1^{commit}"], cwd=self.repo).stdout.strip(), sha)
-
-    def test_stable_after_commits_following_rc(self):
-        tag(self.repo, "v1.0.0")
-        commit_file(self.repo, "fix: one")
-        prepare_and_commit(self.repo, "chore: prepare 1.0.1")
-        rc_sha = head(self.repo)
+        self.assertEqual(main(["stable"]), 1)
+        self.assertEqual(self.snapshot_release_files(), before)
         tag(self.repo, "v1.0.1-rc.1")
         commit_file(self.repo, "fix: two")
         prepare_and_commit(self.repo, "chore: prepare 1.0.1 again")
-        stable_sha = head(self.repo)
-        self.assertEqual(main(["stable"]), 0)
-        self.assertNotEqual(rc_sha, stable_sha)
-        self.assertEqual(run(["git", "rev-parse", "v1.0.1^{commit}"], cwd=self.repo).stdout.strip(), stable_sha)
+        before = self.snapshot_release_files()
+        self.assertEqual(main(["stable"]), 1)
+        self.assertEqual(self.snapshot_release_files(), before)
+
+    def test_candidate_selects_newest_reachable_rc(self):
+        self.assertEqual(main(["candidate"]), 1)
+        tag(self.repo, "v1.0.1-rc.9")
+        tag(self.repo, "v1.0.1-rc.10")
+        commit_file(self.repo, "chore: later")
+        tag(self.repo, "v1.0.0-rc.11")
+        run(["git", "checkout", "-b", "side"], cwd=self.repo)
+        commit_file(self.repo, "chore: unmerged")
+        tag(self.repo, "v2.0.0-rc.1")
+        run(["git", "checkout", "main"], cwd=self.repo)
+        output = StringIO()
+        with redirect_stdout(output):
+            self.assertEqual(main(["candidate"]), 0)
+        self.assertEqual(output.getvalue(), "v1.0.1-rc.10\n")
 
     def test_promotion_reuses_rc_commit(self):
         tag(self.repo, "v1.0.0")
@@ -206,12 +207,10 @@ class ReleaseLifecycleTest(unittest.TestCase):
         commit_file(self.repo, "chore: later")
         tag(self.repo, "v1.0.1")
         run(["git", "checkout", sha], cwd=self.repo)
-        for rc in (False, True):
-            if rc:
-                tag(self.repo, "v1.0.1-rc.1")
-            before = self.snapshot_release_files()
-            self.assertEqual(main(["stable"]), 1)
-            self.assertEqual(self.snapshot_release_files(), before)
+        tag(self.repo, "v1.0.1-rc.1")
+        before = self.snapshot_release_files()
+        self.assertEqual(main(["stable"]), 1)
+        self.assertEqual(self.snapshot_release_files(), before)
 
     def test_dirty_tree_rejected(self):
         prepare_and_commit(self.repo, "chore: prepare 1.0.0")

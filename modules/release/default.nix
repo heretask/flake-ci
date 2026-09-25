@@ -57,6 +57,25 @@ in {
         };
       });
     };
+
+    stableApproval = mkOption {
+      description = "Require a successful commit status on the release candidate before a stable release promotes it.";
+      default = null;
+      type = types.nullOr (types.submodule {
+        options = {
+          context = mkOption {
+            type = types.str;
+            example = "staging-accepted";
+            description = "Commit status context that records approval.";
+          };
+          creator = mkOption {
+            type = types.str;
+            example = "my-release-app[bot]";
+            description = "Login that must have created the status.";
+          };
+        };
+      });
+    };
   };
 
   config = lib.mkIf cfg.enable {
