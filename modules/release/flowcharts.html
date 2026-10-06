@@ -144,7 +144,7 @@ flowchart TD
 </section>
 
 <section class="tab" id="tab-stable">
-  <p class="blurb">Promotion uses VERSION and a matching RC at HEAD without recalculating release content. A direct stable release calculates the target and checks the prepared files. Both paths share tag collision checks and tag creation.</p>
+  <p class="blurb">Stable only promotes a release candidate: it uses VERSION and a matching RC at HEAD without recalculating release content. The workflow promotes <code>main</code> HEAD, so <code>main</code> must not move between cutting the RC and promoting it.</p>
   <div class="viewport">
     <div class="zoombar"><button data-z="in">+</button><button data-z="out">−</button><button data-z="fit">⤢</button></div>
     <div class="canvas"><pre class="mermaid">
@@ -153,10 +153,8 @@ flowchart TD
     B -- yes --> X1["ERROR: working tree is dirty"]
     B -- no --> C{"RC for VERSION<br/>pointing at HEAD?"}
     C -- yes --> D["target = VERSION<br/>reuse the RC commit"]
-    C -- no --> E["calculate target and expected files<br/>check prepared bytes"]
-    E -- "not ready" --> X3["ERROR: VERSION or<br/>CHANGELOG mismatch"]
+    C -- no --> X3["ERROR: HEAD is not<br/>a release candidate"]
     D --> G{vTarget tag exists?}
-    E -- ready --> G
     G -- no --> H["tag vTarget at HEAD"]
     H --> F["print vTarget"]
     G -- "at HEAD" --> F
@@ -183,7 +181,7 @@ stateDiagram-v2
     RC --> RC: rc at same HEAD (idempotent)
     RC --> Unprepared: fix keeps target, feat changes target and resets RC numbering
     RC --> Stable: stable at rc commit → vT (trusts VERSION + rc)
-    Prepared --> Stable: stable without RC, prepared bytes must match
+    Prepared --> Prepared: stable refuses without an RC at HEAD
     Stable --> Unprepared: next impactful commit (new baseline = vT)
     Unprepared --> Unprepared: chore/docs only, target stays at latest stable
     </pre></div>
@@ -192,12 +190,15 @@ stateDiagram-v2
 </section>
 
 <section class="tab" id="tab-workflows">
-  <p class="blurb">Run <code>Release</code> with the <code>rc</code> or <code>stable</code> channel. If preparation changes files, it opens a PR and stops. Merge the PR, wait for Nix checks, then rerun <code>Release</code> with the desired channel. After pushing the tag and channel, the job publishes a GitHub Release with the changelog notes. RCs are prereleases. Their notes show changes since the highest earlier RC number for the same version whose commit is an ancestor of the checkout. Stable releases and RCs without an eligible predecessor use the full stable-version section. Channel pushes notify Ops independently.</p>
+  <p class="blurb">Run <code>Release</code> with the <code>rc</code> or <code>stable</code> channel. For <code>rc</code>, if preparation changes files, it opens a PR and stops. Merge the PR, wait for Nix checks, then rerun <code>Release</code>. For <code>stable</code>, the prepare job selects <code>main</code> HEAD without preparing; the release job refuses unless that commit is an RC. After pushing the tag and channel, the job publishes a GitHub Release with the changelog notes. RCs are prereleases. Their notes show changes since the highest earlier RC number for the same version whose commit is an ancestor of the checkout. Stable releases and RCs without an eligible predecessor use the full stable-version section. Channel pushes notify Ops independently.</p>
   <div class="viewport">
     <div class="zoombar"><button data-z="in">+</button><button data-z="out">−</button><button data-z="fit">⤢</button></div>
     <div class="canvas"><pre class="mermaid">
 flowchart TD
-    A["Run Release<br/>channel: rc (default) or stable"] --> B["Prepare job: select main SHA<br/>prepare VERSION and CHANGELOG"]
+    A["Run Release<br/>channel: rc (default) or stable"] --> S{channel}
+    S -- rc --> B["Prepare job: select main SHA<br/>prepare VERSION and CHANGELOG"]
+    S -- stable --> R["Prepare job: select main HEAD<br/>release stable refuses unless it is an RC"]
+    R -- "ready=true and main SHA" --> F
     B --> C{"Prepared files already match?"}
     C -- "yes: ready=true and selected SHA" --> F["Release job uses selected SHA<br/>and requested channel"]
     C -- no --> D["create-pull-request opens or updates PR<br/>branch: automation/prepare-release<br/>release job is skipped"]
@@ -340,7 +341,7 @@ const scenarios = [
         note: "Target is re-measured from <strong>stable</strong>, never from the last rc — the feat escalates it to 1.1.0 while VERSION still says 1.0.1." },
       { h: `${T("v1.0.0")} ── fix ── P(1.0.1) ${T("[rc.1]")} ── feat ── HEAD`,
         cmd: "release rc", res: "release: VERSION 1.0.1 does not match calculated prepare output for 1.1.0", kind: "err",
-        note: "The prepared files must match target 1.1.0 before releasing. <code>release stable</code> fails with the same error because there is no matching RC at HEAD." },
+        note: "The prepared files must match target 1.1.0 before releasing. <code>release stable</code> refuses too because HEAD is not a release candidate." },
       { h: `${T("v1.0.0")} ── fix ── P(1.0.1) ${T("[rc.1]")} ── feat ── ${N("P(1.1.0)")}`,
         cmd: "release rc", res: "v1.1.0-rc.1", kind: "ok",
         note: "Recovery: re-prepare rewrites VERSION to 1.1.0 (changelog section renamed too). Counter <strong>resets to 1</strong> because the target changed. v1.0.1-rc.* are orphaned; 1.0.1 will simply never exist on this line." },
@@ -358,8 +359,8 @@ const scenarios = [
         res: "latest stable: 1.1.1\ncalculated target: 1.1.1\nVERSION target: 1.1.1\ncurrent matching RC: none\nnext RC: none (nothing to release since v1.1.1)", kind: "warn",
         note: "The target stays at the latest stable. Preparation leaves the files unchanged, and status reports no next RC." },
       { h: `${T("v1.1.1")} ── chore ── HEAD`,
-        cmd: "release stable", res: "release: v1.1.1 already exists on a different commit", kind: "err",
-        note: "Nothing to release — no bad stable can ship." },
+        cmd: "release stable", res: "release: HEAD is not a release candidate for 1.1.1; stable only promotes an RC commit", kind: "err",
+        note: "Nothing to release — stable never tags a commit that was not a release candidate." },
       { h: `${T("v1.1.1")} ── chore ── HEAD`,
         cmd: "release rc", res: "release: nothing to release: no release-impacting commits since v1.1.1", kind: "err",
         note: "An RC requires a target newer than the latest stable. Rerunning at the unchanged promoted RC commit still prints its existing RC tag." },
@@ -369,9 +370,9 @@ const scenarios = [
     name: "5 · Collisions & misc",
     sub: "tag collisions, dirty tree, branch visibility",
     steps: [
-      { h: `${T("v1.1.1")} ── fix ── P(1.1.2)  ${N("(v1.1.2 tagged on wrong commit by someone)")}`,
+      { h: `${T("v1.1.1")} ── fix ── P(1.1.2) ${T("[v1.1.2-rc.1]")}  ${N("(v1.1.2 tagged on wrong commit by someone)")}`,
         cmd: "release stable", res: "release: v1.1.2 already exists on a different commit", kind: "err",
-        note: "A stable tag on a different commit is a hard error on both the promotion and the direct path. Same tag at HEAD ⇒ idempotent print instead." },
+        note: "A stable tag on a different commit is a hard error. Same tag at HEAD ⇒ idempotent print instead." },
       { h: `${T("v1.1.1")} ── fix ── P(1.1.2) + ${N("uncommitted changes")}`,
         cmd: "release rc  /  release stable", res: "release: working tree is dirty", kind: "err",
         note: "Both commands refuse a dirty tree before doing anything else." },

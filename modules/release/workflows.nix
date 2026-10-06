@@ -7,7 +7,6 @@
   steps = import ../github/steps.nix {inherit (github) extraNixConfig;};
   inherit (steps) nixRun;
   owner = builtins.head (lib.splitString "/" cfg.notify.repository);
-
   appToken = permissions: {
     name = "Create release App token (v3.2.0)";
     id = "app-token";
@@ -63,16 +62,25 @@ in
           steps.installNix
           {
             name = "Prepare release files";
+            "if" = "inputs.channel == 'rc'";
             run = "${nixRun} .#release -- prepare";
           }
           {
             name = "Check preparation result";
             id = "result";
+            env.CHANNEL = "\${{ inputs.channel }}";
             run = ''
               set -euo pipefail
 
               sha="$(git rev-parse HEAD)"
               echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+              # Stable promotes main HEAD as it is; `release stable` refuses unless it is an RC.
+              if [[ "$CHANNEL" == stable ]]; then
+                echo "ready=true" >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+
               if git diff --quiet -- VERSION CHANGELOG.md; then
                 echo "ready=true" >> "$GITHUB_OUTPUT"
               else
@@ -212,6 +220,32 @@ in
                 -f "client_payload[channel]=$CHANNEL" \
                 -f "client_payload[sha]=$SHA"
             '';
+          }
+        ];
+      };
+    };
+  }
+  // lib.optionalAttrs cfg.freeze.enable {
+    release-freeze = {
+      name = "Release freeze";
+      on.pull_request = {
+        branches = ["main"];
+        types = ["opened" "synchronize" "reopened" "labeled" "unlabeled"];
+      };
+      permissions.contents = "read";
+      jobs.freeze = {
+        name = "freeze";
+        # A job skipped by its condition passes a required check: hotfixes and release
+        # preparation PRs may merge while a release candidate is tested.
+        "if" = "!contains(github.event.pull_request.labels.*.name, '${cfg.freeze.label}') && github.head_ref != 'automation/prepare-release'";
+        runs-on = github.runner;
+        timeout-minutes = 10;
+        steps = [
+          (checkoutAt "Checkout main" "main")
+          steps.installNix
+          {
+            name = "Refuse merges while a release candidate is tested";
+            run = "${nixRun} .#release -- freeze";
           }
         ];
       };

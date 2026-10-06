@@ -101,6 +101,13 @@ class ReleaseWorkflowsTest(unittest.TestCase):
         self.assertEqual(options["commit-message"], options["title"])
         self.assertIn("rerun Release", options["body"])
 
+    def test_stable_selects_main_head_without_preparing(self):
+        # Prepared files are irrelevant for stable: it promotes main HEAD and `release stable` checks it is an RC.
+        result, output, commands = self.run_step(RESULT, CHANNEL="stable", PREPARED="0")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(output, f"sha={SHA}\nready=true\n")
+        self.assertFalse(any(command[:2] == ["git", "diff"] for command in commands))
+
     def test_invalid_channel_is_rejected_before_publication(self):
         result, _, commands = self.run_step(PERFORM, CHANNEL="other")
         self.assertNotEqual(result.returncode, 0)

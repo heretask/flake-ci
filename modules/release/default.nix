@@ -57,6 +57,15 @@ in {
         };
       });
     };
+
+    freeze = {
+      enable = lib.mkEnableOption "a `freeze` PR check that fails while the newest release candidate on `main` has no stable release";
+      label = mkOption {
+        type = types.str;
+        default = "hotfix";
+        description = "PR label that lets a PR merge during the freeze.";
+      };
+    };
   };
 
   config = lib.mkIf cfg.enable {
