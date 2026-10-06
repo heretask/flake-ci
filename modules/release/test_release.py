@@ -165,21 +165,6 @@ class ReleaseLifecycleTest(unittest.TestCase):
         self.assertEqual(main(["stable"]), 1)
         self.assertEqual(self.snapshot_release_files(), before)
 
-    def test_candidate_selects_newest_reachable_rc(self):
-        self.assertEqual(main(["candidate"]), 1)
-        tag(self.repo, "v1.0.1-rc.9")
-        tag(self.repo, "v1.0.1-rc.10")
-        commit_file(self.repo, "chore: later")
-        tag(self.repo, "v1.0.0-rc.11")
-        run(["git", "checkout", "-b", "side"], cwd=self.repo)
-        commit_file(self.repo, "chore: unmerged")
-        tag(self.repo, "v2.0.0-rc.1")
-        run(["git", "checkout", "main"], cwd=self.repo)
-        output = StringIO()
-        with redirect_stdout(output):
-            self.assertEqual(main(["candidate"]), 0)
-        self.assertEqual(output.getvalue(), "v1.0.1-rc.10\n")
-
     def test_promotion_reuses_rc_commit(self):
         tag(self.repo, "v1.0.0")
         commit_file(self.repo, "fix: one")

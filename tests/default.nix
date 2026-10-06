@@ -26,10 +26,6 @@
             privateKeySecret = "RELEASE_APP_PRIVATE_KEY";
           };
           notify.repository = "example/ops";
-          stableApproval = {
-            context = "staging-accepted";
-            creator = "release-app[bot]";
-          };
         };
       };
   in {

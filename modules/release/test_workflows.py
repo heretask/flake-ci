@@ -40,9 +40,6 @@ if command[:3] == ['gh', 'release', 'create']:
 if command[:3] == ['gh', 'release', 'view']:
     print(os.environ['IS_DRAFT'])
     sys.exit(int(os.environ['VIEW_EXIT']))
-if command[:2] == ['gh', 'api'] and '/statuses' in command[2]:
-    print(os.environ['STATUSES'])
-    sys.exit(0)
 if command[0] == 'gh':
     print(os.environ['CI_RUN'])
 if command[0] == 'nix':
@@ -104,28 +101,12 @@ class ReleaseWorkflowsTest(unittest.TestCase):
         self.assertEqual(options["commit-message"], options["title"])
         self.assertIn("rerun Release", options["body"])
 
-    def test_stable_selects_newest_candidate_only_when_approved(self):
-        context, creator = RESULT["env"]["APPROVAL_CONTEXT"], RESULT["env"]["APPROVAL_CREATOR"]
-
-        def status(state, **fields):
-            return {"state": state, "context": context, "creator": {"login": creator}} | fields
-
-        for statuses, approved in (
-            ([status("success")], True),
-            ([status("failure"), status("success")], False),
-            ([], False),
-            ([status("success", creator={"login": "someone"})], False),
-            ([status("success", context="other")], False),
-        ):
-            with self.subTest(statuses=statuses):
-                result, output, commands = self.run_step(
-                    RESULT, CHANNEL="stable", RELEASE_TAG="v1.2.3-rc.2", STATUSES=json.dumps(statuses),
-                    APPROVAL_CONTEXT=context, APPROVAL_CREATOR=creator,
-                )
-                self.assertEqual(result.returncode == 0, approved, result.stderr)
-                self.assertEqual(output, f"sha={SHA}\nready=true\n" if approved else "")
-                self.assertIn(["git", "rev-parse", "--verify", "refs/tags/v1.2.3-rc.2^{commit}"], commands)
-                self.assertFalse(any(command[:2] == ["git", "diff"] for command in commands))
+    def test_stable_selects_main_head_without_preparing(self):
+        # Prepared files are irrelevant for stable: it promotes main HEAD and `release stable` checks it is an RC.
+        result, output, commands = self.run_step(RESULT, CHANNEL="stable", PREPARED="0")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(output, f"sha={SHA}\nready=true\n")
+        self.assertFalse(any(command[:2] == ["git", "diff"] for command in commands))
 
     def test_invalid_channel_is_rejected_before_publication(self):
         result, _, commands = self.run_step(PERFORM, CHANNEL="other")

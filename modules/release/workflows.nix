@@ -7,22 +7,6 @@
   steps = import ../github/steps.nix {inherit (github) extraNixConfig;};
   inherit (steps) nixRun;
   owner = builtins.head (lib.splitString "/" cfg.notify.repository);
-  approval = cfg.stableApproval;
-
-  # Fails unless the approval creator's newest status for the context succeeded.
-  approvalCheck = lib.optionalString (approval != null) ''
-    statuses="$(gh api "/repos/$GITHUB_REPOSITORY/commits/$sha/statuses?per_page=100")"
-    state="$(jq -r --arg context "$APPROVAL_CONTEXT" --arg creator "$APPROVAL_CREATOR" '
-      map(select(.context == $context and .creator.login == $creator))
-      | first | .state // empty
-    ' <<< "$statuses")"
-    if [[ "$state" != success ]]; then
-      printf '%s (%s) has no successful %s status from %s\n' \
-        "$rc" "$sha" "$APPROVAL_CONTEXT" "$APPROVAL_CREATOR" >&2
-      exit 1
-    fi
-  '';
-
   appToken = permissions: {
     name = "Create release App token (v3.2.0)";
     id = "app-token";
@@ -70,11 +54,10 @@ in
           sha = "\${{ steps.result.outputs.sha }}";
         };
         steps = [
-          (appToken ({
-              permission-contents = "write";
-              permission-pull-requests = "write";
-            }
-            // lib.optionalAttrs (approval != null) {permission-statuses = "read";}))
+          (appToken {
+            permission-contents = "write";
+            permission-pull-requests = "write";
+          })
           (checkoutAt "Checkout main" "main")
           steps.installNix
           {
@@ -85,27 +68,19 @@ in
           {
             name = "Check preparation result";
             id = "result";
-            env =
-              {CHANNEL = "\${{ inputs.channel }}";}
-              // lib.optionalAttrs (approval != null) {
-                GH_TOKEN = "\${{ steps.app-token.outputs.token }}";
-                APPROVAL_CONTEXT = approval.context;
-                APPROVAL_CREATOR = approval.creator;
-              };
+            env.CHANNEL = "\${{ inputs.channel }}";
             run = ''
               set -euo pipefail
 
+              sha="$(git rev-parse HEAD)"
+              echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+              # Stable promotes main HEAD as it is; `release stable` refuses unless it is an RC.
               if [[ "$CHANNEL" == stable ]]; then
-                rc="$(${nixRun} .#release -- candidate)"
-                sha="$(git rev-parse --verify "refs/tags/$rc^{commit}")"
-                ${approvalCheck}
-                echo "sha=$sha" >> "$GITHUB_OUTPUT"
                 echo "ready=true" >> "$GITHUB_OUTPUT"
                 exit 0
               fi
 
-              sha="$(git rev-parse HEAD)"
-              echo "sha=$sha" >> "$GITHUB_OUTPUT"
               if git diff --quiet -- VERSION CHANGELOG.md; then
                 echo "ready=true" >> "$GITHUB_OUTPUT"
               else
