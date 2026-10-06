@@ -225,3 +225,29 @@ in
       };
     };
   }
+  // lib.optionalAttrs cfg.freeze.enable {
+    release-freeze = {
+      name = "Release freeze";
+      on.pull_request = {
+        branches = ["main"];
+        types = ["opened" "synchronize" "reopened" "labeled" "unlabeled"];
+      };
+      permissions.contents = "read";
+      jobs.freeze = {
+        name = "freeze";
+        # A job skipped by its condition passes a required check: hotfixes and release
+        # preparation PRs may merge while a release candidate is tested.
+        "if" = "!contains(github.event.pull_request.labels.*.name, '${cfg.freeze.label}') && github.head_ref != 'automation/prepare-release'";
+        runs-on = github.runner;
+        timeout-minutes = 10;
+        steps = [
+          (checkoutAt "Checkout main" "main")
+          steps.installNix
+          {
+            name = "Refuse merges while a release candidate is tested";
+            run = "${nixRun} .#release -- freeze";
+          }
+        ];
+      };
+    };
+  }

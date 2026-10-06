@@ -26,6 +26,7 @@
             privateKeySecret = "RELEASE_APP_PRIVATE_KEY";
           };
           notify.repository = "example/ops";
+          freeze.enable = true;
         };
       };
   in {

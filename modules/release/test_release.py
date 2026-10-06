@@ -165,6 +165,28 @@ class ReleaseLifecycleTest(unittest.TestCase):
         self.assertEqual(main(["stable"]), 1)
         self.assertEqual(self.snapshot_release_files(), before)
 
+    def test_freeze_holds_from_rc_until_its_stable_release(self):
+        tag(self.repo, "v1.0.0")
+        self.assertEqual(main(["freeze"]), 0)
+        commit_file(self.repo, "fix: one")
+        prepare_and_commit(self.repo, "chore: prepare 1.0.1")
+        tag(self.repo, "v1.0.1-rc.1")
+        self.assertEqual(main(["freeze"]), 1)
+        commit_file(self.repo, "fix: hotfix")
+        prepare_and_commit(self.repo, "chore: prepare 1.0.1 again")
+        tag(self.repo, "v1.0.1-rc.2")
+        self.assertEqual(main(["freeze"]), 1)
+        tag(self.repo, "v1.0.1")
+        self.assertEqual(main(["freeze"]), 0)
+
+    def test_freeze_ignores_candidates_off_main(self):
+        tag(self.repo, "v1.0.0")
+        run(["git", "checkout", "-b", "side"], cwd=self.repo)
+        commit_file(self.repo, "fix: unmerged")
+        tag(self.repo, "v1.0.1-rc.1")
+        run(["git", "checkout", "main"], cwd=self.repo)
+        self.assertEqual(main(["freeze"]), 0)
+
     def test_promotion_reuses_rc_commit(self):
         tag(self.repo, "v1.0.0")
         commit_file(self.repo, "fix: one")

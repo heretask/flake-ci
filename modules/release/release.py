@@ -397,6 +397,20 @@ def next_rc_tag(tags: Sequence[str], target: Version) -> str:
     return f"v{target}-rc.{n}"
 
 
+def latest_rc(root: Path, tags: Sequence[str]) -> tuple[Version, str] | None:
+    found: list[tuple[tuple[int, int, int], int, Version, str]] = []
+    for tag in tags:
+        parsed = parse_rc_tag(tag)
+        if parsed is None:
+            continue
+        version, n = parsed
+        if reachable_from_head(root, peel_tag(root, tag)):
+            found.append((version.tuple, n, version, tag))
+    if not found:
+        return None
+    *_, version, tag = max(found)
+    return version, tag
+
 
 def collect_status(root: Path, config: Config) -> Status:
     tags = list_tags(root)
@@ -502,6 +516,17 @@ def cmd_rc(root: Path, config: Config) -> int:
     return 0
 
 
+def cmd_freeze(root: Path) -> int:
+    """Fail while the newest release candidate on HEAD has not been released as stable."""
+    tags = list_tags(root)
+    rc = latest_rc(root, tags)
+    stable = latest_stable(root, tags)
+    if rc is None or (stable is not None and stable[0].tuple >= rc[0].tuple):
+        print("main is open: no release candidate is being tested")
+        return 0
+    print(f"main is frozen while {rc[1]} is tested; merge only hotfixes", file=sys.stderr)
+    return 1
+
 
 def cmd_stable(root: Path, config: Config) -> int:
     if is_dirty(root):
@@ -529,6 +554,7 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     sub.add_parser("status")
     sub.add_parser("rc")
     sub.add_parser("stable")
+    sub.add_parser("freeze")
     notes = sub.add_parser("notes")
     notes.add_argument("tag")
     prepare = sub.add_parser("prepare")
@@ -551,6 +577,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return cmd_rc(root, config)
         if args.command == "stable":
             return cmd_stable(root, config)
+        if args.command == "freeze":
+            return cmd_freeze(root)
         raise ReleaseError(f"unknown command {args.command}")
     except ReleaseError as error:
         print(f"release: {error}", file=sys.stderr)
