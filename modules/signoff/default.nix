@@ -10,8 +10,17 @@
   config = lib.mkIf config.ci.signoff.enable {
     perSystem = {pkgs, ...}: let
       signoff = import ./package.nix {inherit pkgs;};
+      signoff-fast = import ./package.nix {
+        inherit pkgs;
+        name = "signoff-fast";
+        check = false;
+      };
     in {
-      packages.signoff = signoff;
+      packages = {inherit signoff signoff-fast;};
+      apps.signoff-fast = {
+        type = "app";
+        program = lib.getExe signoff-fast;
+      };
       apps.signoff = {
         meta.description = "Run the full Nix flake check and sign off on the tested commit";
         type = "app";
