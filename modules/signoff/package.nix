@@ -1,4 +1,8 @@
-{pkgs}: let
+{
+  pkgs,
+  name ? "signoff",
+  check ? true,
+}: let
   ghSignoff = pkgs.fetchFromGitHub {
     owner = "basecamp";
     repo = "gh-signoff";
@@ -7,7 +11,7 @@
   };
 in
   pkgs.writeShellApplication {
-    name = "signoff";
+    inherit name;
     runtimeInputs = [
       pkgs.gh
       pkgs.git
@@ -15,7 +19,7 @@ in
     ];
     text = ''
       if (( $# != 0 )); then
-        echo "Usage: signoff" >&2
+        echo "Usage: ${name}" >&2
         exit 1
       fi
 
@@ -103,13 +107,15 @@ in
         fi
       fi
 
-      if ! nix flake check -L --option accept-flake-config false; then
-        echo "nix flake check failed; signoff is refused" >&2
-        exit 1
-      fi
+      ${pkgs.lib.optionalString check ''
+        if ! nix flake check -L --option accept-flake-config false; then
+          echo "nix flake check failed; signoff is refused" >&2
+          exit 1
+        fi
+      ''}
 
       if ! after="$(snapshot)"; then
-        echo "Repository state could not be verified after nix flake check; signoff is refused" >&2
+        echo "Repository state could not be verified; signoff is refused" >&2
         exit 1
       fi
       read -r post_commit post_tree post_workspace_tree <<< "$after"
