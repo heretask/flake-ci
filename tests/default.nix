@@ -32,10 +32,12 @@
           runner = "ubuntu-22.04";
           timeoutMinutes = 45;
         };
+        # Exercise the non-default cache here; flake-ci's own generated workflows cover the default.
+        ci.github.cache = "hestia";
       };
   in {
     checks = lib.mapAttrs' (name: lib.nameValuePair "fixture-${name}") (
-      lib.getAttrs ["commitlint" "release-lifecycle" "workflow-behavior" "actionlint" "flake-check-job"] consumer.checks.${system}
+      lib.getAttrs ["commitlint" "release-lifecycle" "workflow-behavior" "actionlint" "flake-check-job" "hestia-cache"] consumer.checks.${system}
     );
   };
 }

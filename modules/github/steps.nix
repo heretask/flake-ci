@@ -21,6 +21,15 @@
     uses = "DeterminateSystems/magic-nix-cache-action@908b263ff629f4cc17666315b7fd3ec127c6244d"; # v14
   };
 
+  hestia = {
+    name = "Enable hestia cache (v3.1.0)";
+    uses = "Mic92/hestia@dfed9ced335d28978ba74e513939a10db1f71025"; # v3.1.0
+    "with" = {
+      version = "v3.1.0";
+      upstream-cache-filter = "true";
+    };
+  };
+
   updateFlakeLock = "DeterminateSystems/update-flake-lock@834c491b2ece4de0bbd00d85214bb5e83b4da5c6"; # v28
   createAppToken = "actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1"; # v3.2.0
   createPullRequest = "peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1"; # v8.1.1
