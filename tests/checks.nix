@@ -82,6 +82,21 @@ in {
         assert github.flakeCheck.runner != github.runner;
         assert github.flakeCheck.timeoutMinutes != 30;
           pkgs.runCommandLocal "flake-check-job" {} "touch $out";
+
+      # cache = "hestia" swaps the flake-check cache step and adds what hestia needs.
+      hestia-cache = let
+        flakeCheck = github.workflows.nix-check.jobs.flake-check;
+        uses = prefix: builtins.any (step: lib.hasPrefix prefix (step.uses or "")) flakeCheck.steps;
+        checkStep = lib.findFirst (step: (step.name or null) == "Check flake") {} flakeCheck.steps;
+      in
+        assert github.cache == "hestia";
+        assert uses "Mic92/hestia@";
+        assert !(uses "DeterminateSystems/magic-nix-cache-action@");
+        assert (flakeCheck.permissions.actions or null) == "read";
+        assert (checkStep.timeout-minutes or null) == github.flakeCheck.timeoutMinutes - 10;
+        assert github.workflows ? hestia-gc;
+        assert (github.workflows.hestia-gc.jobs.gc.permissions.actions or null) == "write";
+          pkgs.runCommandLocal "hestia-cache" {} "touch $out";
     };
   };
 }

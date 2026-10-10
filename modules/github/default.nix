@@ -32,6 +32,17 @@ in {
       description = "Timeout in minutes for the flake-check job, e.g. longer for cold builds.";
     };
 
+    cache = mkOption {
+      type = types.enum ["magic-nix-cache" "hestia"];
+      default = "magic-nix-cache";
+      example = "hestia";
+      description = ''
+        Binary cache for the flake-check jobs. `hestia` packs built paths into a few large entries
+        in the GitHub Actions cache, avoiding the cache rate limit that throttles Magic Nix Cache,
+        and adds a scheduled `hestia-gc` workflow. It needs `flakeCheck.timeoutMinutes` above 10.
+      '';
+    };
+
     darwinCheck = lib.mkEnableOption "a manually dispatched flake check on macOS";
 
     extraNixConfig = mkOption {

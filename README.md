@@ -61,6 +61,7 @@ Then run `nix run .#write-files` and commit the generated files.
 | `ci.github.runner` | `"ubuntu-24.04"` | Linux runner. |
 | `ci.github.flakeCheck.runner` | `ci.github.runner` | Runner for the flake-check job, e.g. a larger runner. |
 | `ci.github.flakeCheck.timeoutMinutes` | `30` | Timeout in minutes for the flake-check job. |
+| `ci.github.cache` | `"magic-nix-cache"` | Nix binary cache for flake-check jobs: `"magic-nix-cache"` or `"hestia"`. |
 | `ci.github.darwinCheck` | `false` | Manually dispatched flake check on macOS. |
 | `ci.github.extraNixConfig` | `""` | Extra `nix.conf` lines for the Nix installer, e.g. binary caches. |
 | `ci.github.inputUpdates.<input>.schedule` | `{}` | Scheduled PR updating one flake input. |
@@ -73,6 +74,10 @@ Then run `nix run .#write-files` and commit the generated files.
 | `ci.nixFormat.{enable,paths,excludes}` | off | treefmt Nix formatters and `checks.treefmt` over `paths`. |
 
 Every workflow runs Nix with `--option accept-flake-config false`.
+
+## Hestia cache
+
+Set `ci.github.cache = "hestia";` to use [Mic92/hestia](https://github.com/Mic92/hestia) instead of Magic Nix Cache for flake-check jobs. Magic Nix Cache hits GitHub's Actions cache rate limit (1500 downloads per minute per repository) and then disables itself for the rest of the run. Hestia stores NARs as a few large chunked packs, so it needs far fewer cache entries. In this mode the hestia step is pinned to v3.1.0, flake-check jobs get `actions: read` for hestia's eviction check, and the Check flake step times out 10 minutes before its job so hestia's upload drain still runs. A daily `hestia-gc` workflow with `actions: write` garbage-collects the cache.
 
 ## Development
 
