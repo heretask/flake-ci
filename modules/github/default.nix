@@ -17,6 +17,14 @@ in {
       description = "Runner for Linux jobs.";
     };
 
+    flakeCheck.runner = mkOption {
+      type = types.str;
+      default = cfg.runner;
+      defaultText = lib.literalExpression "config.ci.github.runner";
+      example = "ubuntu-24.04-4core";
+      description = "Runner for the flake-check job, e.g. a larger runner for memory-heavy checks.";
+    };
+
     darwinCheck = lib.mkEnableOption "a manually dispatched flake check on macOS";
 
     extraNixConfig = mkOption {

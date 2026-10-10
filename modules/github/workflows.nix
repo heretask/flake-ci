@@ -103,7 +103,7 @@ in
       };
       jobs.flake-check = {
         name = "flake-check";
-        runs-on = cfg.runner;
+        runs-on = cfg.flakeCheck.runner;
         timeout-minutes = 30;
         steps = [
           steps.checkout

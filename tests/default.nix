@@ -27,10 +27,12 @@
           };
           notify.repository = "example/ops";
         };
+        # Differs from ci.github.runner so the fixture-flake-check-runner check can tell them apart.
+        ci.github.flakeCheck.runner = "ubuntu-22.04";
       };
   in {
     checks = lib.mapAttrs' (name: lib.nameValuePair "fixture-${name}") (
-      lib.getAttrs ["commitlint" "release-lifecycle" "workflow-behavior" "actionlint"] consumer.checks.${system}
+      lib.getAttrs ["commitlint" "release-lifecycle" "workflow-behavior" "actionlint" "flake-check-runner"] consumer.checks.${system}
     );
   };
 }

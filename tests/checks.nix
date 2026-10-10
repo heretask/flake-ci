@@ -70,6 +70,15 @@ in {
         ))}
         touch "$out"
       '';
+
+      # flakeCheck.runner moves only the flake-check job; other Linux jobs stay on runner.
+      flake-check-runner = let
+        runsOn = stem: job: github.workflows.${stem}.jobs.${job}.runs-on;
+      in
+        assert runsOn "nix-check" "flake-check" == github.flakeCheck.runner;
+        assert runsOn "pr-title" "lint" == github.runner;
+        assert github.flakeCheck.runner != github.runner;
+          pkgs.runCommandLocal "flake-check-runner" {} "touch $out";
     };
   };
 }
