@@ -103,8 +103,8 @@ in
       };
       jobs.flake-check = {
         name = "flake-check";
-        runs-on = cfg.runner;
-        timeout-minutes = 30;
+        runs-on = cfg.flakeCheck.runner;
+        timeout-minutes = cfg.flakeCheck.timeoutMinutes;
         steps = [
           steps.checkout
           steps.reclaimDisk

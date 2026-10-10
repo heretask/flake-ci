@@ -27,10 +27,15 @@
           };
           notify.repository = "example/ops";
         };
+        # Both differ from their defaults so the fixture-flake-check-job check can tell them apart.
+        ci.github.flakeCheck = {
+          runner = "ubuntu-22.04";
+          timeoutMinutes = 45;
+        };
       };
   in {
     checks = lib.mapAttrs' (name: lib.nameValuePair "fixture-${name}") (
-      lib.getAttrs ["commitlint" "release-lifecycle" "workflow-behavior" "actionlint"] consumer.checks.${system}
+      lib.getAttrs ["commitlint" "release-lifecycle" "workflow-behavior" "actionlint" "flake-check-job"] consumer.checks.${system}
     );
   };
 }

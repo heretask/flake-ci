@@ -70,6 +70,18 @@ in {
         ))}
         touch "$out"
       '';
+
+      # flakeCheck.* settings change only the flake-check job; other Linux jobs keep runner.
+      flake-check-job = let
+        job = stem: name: github.workflows.${stem}.jobs.${name};
+        flakeCheck = job "nix-check" "flake-check";
+      in
+        assert flakeCheck.runs-on == github.flakeCheck.runner;
+        assert flakeCheck.timeout-minutes == github.flakeCheck.timeoutMinutes;
+        assert (job "pr-title" "lint").runs-on == github.runner;
+        assert github.flakeCheck.runner != github.runner;
+        assert github.flakeCheck.timeoutMinutes != 30;
+          pkgs.runCommandLocal "flake-check-job" {} "touch $out";
     };
   };
 }

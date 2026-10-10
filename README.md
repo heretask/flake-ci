@@ -59,6 +59,8 @@ Then run `nix run .#write-files` and commit the generated files.
 | `ci.signoff.enable` | `true` | `signoff` package and app. |
 | `ci.github.enable` | `true` | Generated workflows. |
 | `ci.github.runner` | `"ubuntu-24.04"` | Linux runner. |
+| `ci.github.flakeCheck.runner` | `ci.github.runner` | Runner for the flake-check job, e.g. a larger runner. |
+| `ci.github.flakeCheck.timeoutMinutes` | `30` | Timeout in minutes for the flake-check job. |
 | `ci.github.darwinCheck` | `false` | Manually dispatched flake check on macOS. |
 | `ci.github.extraNixConfig` | `""` | Extra `nix.conf` lines for the Nix installer, e.g. binary caches. |
 | `ci.github.inputUpdates.<input>.schedule` | `{}` | Scheduled PR updating one flake input. |
