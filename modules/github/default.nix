@@ -32,6 +32,18 @@ in {
       description = "Timeout in minutes for the flake-check job, e.g. longer for cold builds.";
     };
 
+    flakeCheck.reclaimDisk = mkOption {
+      type = types.enum ["foreground" "background"];
+      default = "foreground";
+      example = "background";
+      description = ''
+        How the flake-check job frees preinstalled toolchains from the hosted runner's disk.
+        `foreground` blocks for the removal (41-79 s measured on ubuntu-24.04). `background` starts
+        it and moves on, so builds begin with the ~14 GB already free and get ~20 GB more within
+        about two minutes.
+      '';
+    };
+
     cache = mkOption {
       type = types.enum ["magic-nix-cache" "hestia"];
       default = "magic-nix-cache";
