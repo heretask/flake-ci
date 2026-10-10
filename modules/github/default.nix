@@ -25,6 +25,13 @@ in {
       description = "Runner for the flake-check job, e.g. a larger runner for memory-heavy checks.";
     };
 
+    flakeCheck.timeoutMinutes = mkOption {
+      type = types.ints.positive;
+      default = 30;
+      example = 60;
+      description = "Timeout in minutes for the flake-check job, e.g. longer for cold builds.";
+    };
+
     darwinCheck = lib.mkEnableOption "a manually dispatched flake check on macOS";
 
     extraNixConfig = mkOption {
