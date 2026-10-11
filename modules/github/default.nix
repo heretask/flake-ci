@@ -44,6 +44,17 @@ in {
       '';
     };
 
+    flakeCheck.queue = mkOption {
+      type = types.bool;
+      default = false;
+      example = true;
+      description = ''
+        Run main's flake checks one at a time, in push order, instead of side by side. Each run then
+        starts after the previous one has uploaded its builds to the cache, and every commit still
+        gets its own result. Up to 100 runs wait; GitHub cancels any beyond that.
+      '';
+    };
+
     cache = mkOption {
       type = types.enum ["magic-nix-cache" "hestia"];
       default = "magic-nix-cache";
@@ -125,12 +136,16 @@ in {
           ''
         );
 
-        actionlint = pkgs.runCommandLocal "actionlint" {nativeBuildInputs = [pkgs.actionlint];} ''
-          mkdir -p .github
-          cp -r ${rendered} .github/workflows
-          actionlint .github/workflows/*.yaml
-          touch "$out"
-        '';
+        actionlint = let
+          # actionlint does not know concurrency.queue yet (rhysd/actionlint#657).
+          ignoreQueue = lib.optionalString cfg.flakeCheck.queue "-ignore ${lib.escapeShellArg ''unexpected key "queue" for "concurrency" section''} ";
+        in
+          pkgs.runCommandLocal "actionlint" {nativeBuildInputs = [pkgs.actionlint];} ''
+            mkdir -p .github
+            cp -r ${rendered} .github/workflows
+            actionlint ${ignoreQueue}.github/workflows/*.yaml
+            touch "$out"
+          '';
       };
     };
   };

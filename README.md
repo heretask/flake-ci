@@ -62,6 +62,7 @@ Then run `nix run .#write-files` and commit the generated files.
 | `ci.github.flakeCheck.runner` | `ci.github.runner` | Runner for the flake-check job, e.g. a larger runner. |
 | `ci.github.flakeCheck.timeoutMinutes` | `30` | Timeout in minutes for the flake-check job. |
 | `ci.github.flakeCheck.reclaimDisk` | `"foreground"` | `"background"` frees preinstalled toolchains from the runner disk without blocking the flake-check job. See [Runner disk](#runner-disk). |
+| `ci.github.flakeCheck.queue` | `false` | `true` runs main's flake checks one at a time in push order. See [Queued checks](#queued-checks). |
 | `ci.github.cache` | `"magic-nix-cache"` | Nix binary cache for flake-check jobs: `"magic-nix-cache"` or `"hestia"`. |
 | `ci.github.darwinCheck` | `false` | Manually dispatched flake check on macOS. |
 | `ci.github.extraNixConfig` | `""` | Extra `nix.conf` lines for the Nix installer, e.g. binary caches. |
@@ -85,6 +86,10 @@ Set `ci.github.cache = "hestia";` to use [Mic92/hestia](https://github.com/Mic92
 GitHub's `ubuntu-24.04` runner starts with about 14 GB free. The flake-check job removes GHC, Android and .NET first, which frees about 20 GB more but took 41-79 s in measured runs. With `ci.github.flakeCheck.reclaimDisk = "background";` the removal runs detached and the job moves straight on to installing Nix. Builds start on the 14 GB already free. In measured runs the removal finished 71-120 s later, while Nix installed, the flake evaluated and the first builds ran. Its output goes to `$RUNNER_TEMP/reclaim-disk.log`.
 
 [nothing-but-nix](https://github.com/wimpysworld/nothing-but-nix) mounts `/nix` on a btrfs volume carved from a separate `/mnt` disk. The 2-vCPU private-repository runners have no separate disk, so its `holster` mode leaves `/` with under 1 GB free and a 13 GB `/nix`, and its default `cleave` mode blocks for 45-63 s.
+
+## Queued checks
+
+By default each push to `main` gets its own flake-check run, and runs overlap. A run uploads its builds to the cache only when it finishes, so a run that starts while another is still building rebuilds the same derivations. With `ci.github.flakeCheck.queue = true;` the workflow uses one concurrency group per branch with GitHub's `queue: max`: runs wait and start one at a time, oldest first, so each one reuses what the previous run uploaded. Every commit still gets its own result, up to 100 waiting runs, which matters if a release checks for a successful run on an exact commit. A burst of pushes now takes longer to reach the newest commit, since its run waits for the ones before it.
 
 ## Development
 

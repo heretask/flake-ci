@@ -116,10 +116,17 @@ in
       name = "Nix";
       on.push.branches = ["main"];
       permissions.contents = "read";
-      concurrency = {
-        group = "\${{ github.workflow }}-\${{ github.sha }}";
-        cancel-in-progress = true;
-      };
+      concurrency =
+        if cfg.flakeCheck.queue
+        then {
+          group = "\${{ github.workflow }}-\${{ github.ref }}";
+          cancel-in-progress = false;
+          queue = "max";
+        }
+        else {
+          group = "\${{ github.workflow }}-\${{ github.sha }}";
+          cancel-in-progress = true;
+        };
       jobs.flake-check =
         {
           name = "flake-check";
