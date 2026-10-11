@@ -32,6 +32,7 @@
           runner = "ubuntu-22.04";
           timeoutMinutes = 45;
           reclaimDisk = "background";
+          queue = true;
         };
         # Exercise the non-default cache here; flake-ci's own generated workflows cover the default.
         ci.github.cache = "hestia";

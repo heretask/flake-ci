@@ -85,6 +85,13 @@ in {
         assert github.flakeCheck.reclaimDisk == "background";
         assert builtins.elem "Reclaim hosted runner disk in the background" stepNames;
         assert !(builtins.elem "Reclaim hosted runner disk" stepNames);
+        assert github.flakeCheck.queue;
+        assert github.workflows.nix-check.concurrency
+        == {
+          group = "\${{ github.workflow }}-\${{ github.ref }}";
+          cancel-in-progress = false;
+          queue = "max";
+        };
           pkgs.runCommandLocal "flake-check-job" {} "touch $out";
 
       # cache = "hestia" swaps the flake-check cache step and adds what hestia needs.
