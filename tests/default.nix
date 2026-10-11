@@ -27,10 +27,11 @@
           };
           notify.repository = "example/ops";
         };
-        # Both differ from their defaults so the fixture-flake-check-job check can tell them apart.
+        # All differ from their defaults so the fixture-flake-check-job check can tell them apart.
         ci.github.flakeCheck = {
           runner = "ubuntu-22.04";
           timeoutMinutes = 45;
+          reclaimDisk = "background";
         };
         # Exercise the non-default cache here; flake-ci's own generated workflows cover the default.
         ci.github.cache = "hestia";

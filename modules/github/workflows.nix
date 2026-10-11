@@ -127,7 +127,11 @@ in
           timeout-minutes = flakeCheckTimeout;
           steps = [
             steps.checkout
-            steps.reclaimDisk
+            (
+              if cfg.flakeCheck.reclaimDisk == "background"
+              then steps.reclaimDiskInBackground
+              else steps.reclaimDisk
+            )
             steps.installNix
             cacheStep
             {

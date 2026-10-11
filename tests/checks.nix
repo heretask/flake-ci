@@ -75,12 +75,16 @@ in {
       flake-check-job = let
         job = stem: name: github.workflows.${stem}.jobs.${name};
         flakeCheck = job "nix-check" "flake-check";
+        stepNames = map (step: step.name or null) flakeCheck.steps;
       in
         assert flakeCheck.runs-on == github.flakeCheck.runner;
         assert flakeCheck.timeout-minutes == github.flakeCheck.timeoutMinutes;
         assert (job "pr-title" "lint").runs-on == github.runner;
         assert github.flakeCheck.runner != github.runner;
         assert github.flakeCheck.timeoutMinutes != 30;
+        assert github.flakeCheck.reclaimDisk == "background";
+        assert builtins.elem "Reclaim hosted runner disk in the background" stepNames;
+        assert !(builtins.elem "Reclaim hosted runner disk" stepNames);
           pkgs.runCommandLocal "flake-check-job" {} "touch $out";
 
       # cache = "hestia" swaps the flake-check cache step and adds what hestia needs.
