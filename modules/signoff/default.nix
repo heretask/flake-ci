@@ -15,8 +15,14 @@
         name = "signoff-fast";
         check = false;
       };
+      remote-ci = import ./remote.nix {inherit pkgs;};
     in {
-      packages = {inherit signoff signoff-fast;};
+      packages = {inherit signoff signoff-fast remote-ci;};
+      apps.remote-ci = {
+        meta.description = "Flake-check or sign off a GitHub ref without a local checkout";
+        type = "app";
+        program = lib.getExe remote-ci;
+      };
       apps.signoff-fast = {
         type = "app";
         program = lib.getExe signoff-fast;
