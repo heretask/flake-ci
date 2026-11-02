@@ -15,8 +15,8 @@ in {
 
   installNix =
     {
-      name = "Install Determinate Nix (v22)";
-      uses = "DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25"; # v22
+      name = "Install Determinate Nix (v23)";
+      uses = "DeterminateSystems/nix-installer-action@3138316df39ed29be04236d7ffc686fa525866aa"; # v23
     }
     // (
       if extraNixConfig == ""
@@ -25,8 +25,8 @@ in {
     );
 
   magicCache = {
-    name = "Enable Magic Nix Cache (v14)";
-    uses = "DeterminateSystems/magic-nix-cache-action@908b263ff629f4cc17666315b7fd3ec127c6244d"; # v14
+    name = "Enable Magic Nix Cache (v15)";
+    uses = "DeterminateSystems/magic-nix-cache-action@84c0677f58dcedf3b91f8223ce36a9ea5b3c84b7"; # v15
   };
 
   hestia = {
@@ -38,8 +38,8 @@ in {
     };
   };
 
-  updateFlakeLock = "DeterminateSystems/update-flake-lock@834c491b2ece4de0bbd00d85214bb5e83b4da5c6"; # v28
-  createAppToken = "actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1"; # v3.2.0
+  updateFlakeLock = "DeterminateSystems/update-flake-lock@da03c0f078bc4b2c37ee4f7e072d34bf8f188bb3"; # v29
+  createAppToken = "actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510"; # v3.3.0
   createPullRequest = "peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1"; # v8.1.1
 
   reclaimDisk = {

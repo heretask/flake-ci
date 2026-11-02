@@ -9,7 +9,7 @@
   owner = builtins.head (lib.splitString "/" cfg.notify.repository);
 
   appToken = permissions: {
-    name = "Create release App token (v3.2.0)";
+    name = "Create release App token (v3.3.0)";
     id = "app-token";
     uses = steps.createAppToken;
     "with" =
