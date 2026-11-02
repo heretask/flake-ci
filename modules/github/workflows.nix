@@ -58,7 +58,7 @@
           })
         steps.installNix
         {
-          name = "Update ${input} (v28)";
+          name = "Update ${input} (v29)";
           uses = steps.updateFlakeLock;
           "with" = {
             inputs = input;
