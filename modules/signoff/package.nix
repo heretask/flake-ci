@@ -2,6 +2,7 @@
   pkgs,
   name ? "signoff",
   check ? true,
+  skipChecks ? [],
 }: let
   ghSignoff = pkgs.fetchFromGitHub {
     owner = "basecamp";
@@ -9,6 +10,8 @@
     rev = "a8d5ce1cab7f88848f9962e047d26c5cd75f7b92";
     hash = "sha256-gfEPoW1FpWuLSkVwGnF7GNWUeQ1mDyJIsTxQafWJgNk=";
   };
+  inherit (pkgs.stdenv.hostPlatform) system;
+  nixOptions = "-L --option accept-flake-config false";
 in
   pkgs.writeShellApplication {
     inherit name;
@@ -107,9 +110,35 @@ in
         fi
       fi
 
-      ${pkgs.lib.optionalString check ''
-        if ! nix flake check -L --option accept-flake-config false; then
+      ${pkgs.lib.optionalString (check && skipChecks == []) ''
+        if ! nix flake check ${nixOptions}; then
           echo "nix flake check failed; signoff is refused" >&2
+          exit 1
+        fi
+      ''}
+      ${pkgs.lib.optionalString (check && skipChecks != []) ''
+        if ! nix flake check --no-build ${nixOptions}; then
+          echo "nix flake check --no-build failed; signoff is refused" >&2
+          exit 1
+        fi
+        if ! check_names="$(nix eval --raw ${nixOptions} '.#checks.${system}' \
+          --apply 'checks: builtins.concatStringsSep "\n" (builtins.attrNames checks)')"; then
+          echo "Could not list checks.${system}; signoff is refused" >&2
+          exit 1
+        fi
+        declare -A skip=(${pkgs.lib.concatMapStrings (name: "[${pkgs.lib.escapeShellArg name}]=1 ") skipChecks})
+        installables=()
+        skipped=()
+        while IFS= read -r name; do
+          if [[ -n "''${skip[$name]:-}" ]]; then
+            skipped+=("$name")
+          else
+            installables+=(".#checks.${system}.\"$name\"")
+          fi
+        done <<< "$check_names"
+        echo "signoff skips these checks; main's nix flake check runs them: ''${skipped[*]:-none}" >&2
+        if (( ''${#installables[@]} )) && ! nix build --no-link ${nixOptions} "''${installables[@]}"; then
+          echo "nix build of the checks failed; signoff is refused" >&2
           exit 1
         fi
       ''}
