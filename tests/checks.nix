@@ -9,8 +9,11 @@ in {
     ...
   }: let
     commitlint = lib.getExe config.packages.commitlint;
-    valid = ["feat(ci): validate commit messages" "revert(scope): description"];
-    invalid = ["not conventional"];
+    description = char: length: lib.concatStrings (lib.genList (_: char) length);
+    atLimit = "fix(ci): ${description "x" commits.maxLength}";
+    overLimit = "fix(ci): ${description "x" (commits.maxLength + 1)}";
+    valid = ["feat(ci): validate commit messages" "revert(scope): description" atLimit];
+    invalid = ["not conventional" overLimit];
   in {
     checks = {
       # commitlint and the PR-title pattern agree on the fixtures.
@@ -40,6 +43,23 @@ in {
             fi
           '')
           invalid}
+
+        # The limit counts characters, not bytes.
+        printf '%s\n' ${lib.escapeShellArg "fix: ${description "æ" commits.maxLength}"} | ${commitlint}
+
+        # A squash-merged subject: the " (#<PR number>)" suffix does not count,
+        # and a description over the limit is reported without failing.
+        printf '%s\n\nBody.\n' ${lib.escapeShellArg "${atLimit} (#1234)"} | ${commitlint} --squash-merged
+        if printf '%s\n' ${lib.escapeShellArg "${atLimit} (#1234)"} | ${commitlint}; then
+          echo "commitlint accepted a subject over the limit" >&2
+          exit 1
+        fi
+        printf '%s\n' ${lib.escapeShellArg "${overLimit} (#1234)"} | ${commitlint} --squash-merged 2> warning
+        grep -q '^warning: description is ${toString (commits.maxLength + 1)} characters' warning
+        if printf '%s\n' "not conventional (#1234)" | ${commitlint} --squash-merged; then
+          echo "commitlint --squash-merged accepted an invalid subject" >&2
+          exit 1
+        fi
 
         touch "$out"
       '';

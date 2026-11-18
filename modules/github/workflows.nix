@@ -147,7 +147,7 @@ in
               env.HEAD_SHA = "\${{ github.sha }}";
               run = ''
                 git show --no-patch --format=%B "$HEAD_SHA" |
-                  ${nixRun} .#commitlint
+                  ${nixRun} .#commitlint -- --squash-merged
               '';
             }
             (checkFlake flakeCheckTimeout)

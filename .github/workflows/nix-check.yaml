@@ -48,7 +48,7 @@ jobs:
       name: Lint pushed commit
       run: |-
         git show --no-patch --format=%B "$HEAD_SHA" |
-          nix run --option accept-flake-config false .#commitlint
+          nix run --option accept-flake-config false .#commitlint -- --squash-merged
     - name: Check flake
       run: nix flake check -L --option accept-flake-config false
     timeout-minutes: 30
