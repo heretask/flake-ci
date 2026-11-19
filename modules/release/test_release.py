@@ -540,6 +540,8 @@ class ReleaseLifecycleTest(unittest.TestCase):
         tag(self.repo, "v1.0.0")
         noreply = {"GIT_AUTHOR_NAME": "Octo Cat", "GIT_AUTHOR_EMAIL": "123+octocat@users.noreply.github.com"}
         run(["git", "commit", "--allow-empty", "-m", "fix(api): repair thing (#42)"], cwd=self.repo, env=noreply)
+        bot = {"GIT_AUTHOR_NAME": "release-app[bot]", "GIT_AUTHOR_EMAIL": "9+release-app[bot]@users.noreply.github.com"}
+        run(["git", "commit", "--allow-empty", "-m", "fix: bump vulnerable deps (#43)"], cwd=self.repo, env=bot)
         run(["git", "commit", "--allow-empty", "-m", "feat: add thing"], cwd=self.repo)
         run(["git", "commit", "--allow-empty", "-m", "chore!: drop old thing"], cwd=self.repo)
         run(["git", "commit", "--allow-empty", "-m", "chore: tidy"], cwd=self.repo)
@@ -555,7 +557,8 @@ class ReleaseLifecycleTest(unittest.TestCase):
             "### Breaking Changes:\n\n* drop old thing by Test\n\n"
             "### Features:\n\n* add thing by Test\n\n"
             "### Bug Fixes:\n\n"
-            f"* **api:** repair thing by [@octocat](https://github.com/octocat) [(#42)]({url}/pull/42)\n\n",
+            f"* **api:** repair thing by [@octocat](https://github.com/octocat) [(#42)]({url}/pull/42)\n"
+            f"* bump vulnerable deps by [@release-app[bot]](https://github.com/apps/release-app) [(#43)]({url}/pull/43)\n\n",
         )
 
     def test_prepare_orders_by_scope_and_omits_non_changelog_scopes(self):

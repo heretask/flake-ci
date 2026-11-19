@@ -27,7 +27,7 @@
   };
 
   updateInput = input: {schedule}: let
-    title = "chore(nix): update ${input}";
+    title = "chore: update ${input}";
   in {
     name = "Update ${input}";
     on = {

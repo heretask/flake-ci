@@ -77,7 +77,7 @@ in
                 echo "ready=true" >> "$GITHUB_OUTPUT"
               else
                 echo "ready=false" >> "$GITHUB_OUTPUT"
-                echo "title=chore(release): prepare v$(tr -d '[:space:]' < VERSION)" >> "$GITHUB_OUTPUT"
+                echo "title=chore: prepare v$(tr -d '[:space:]' < VERSION)" >> "$GITHUB_OUTPUT"
               fi
             '';
           }
