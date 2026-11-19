@@ -9,6 +9,7 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
+from unittest import mock
 
 from release import Config, ReleaseError, collect_status, main, repo_root
 
@@ -554,8 +555,36 @@ class ReleaseLifecycleTest(unittest.TestCase):
             "### Breaking Changes:\n\n* drop old thing by Test\n\n"
             "### Features:\n\n* add thing by Test\n\n"
             "### Bug Fixes:\n\n"
-            f"* repair thing by [@octocat](https://github.com/octocat) [(#42)]({url}/pull/42)\n\n",
+            f"* **api:** repair thing by [@octocat](https://github.com/octocat) [(#42)]({url}/pull/42)\n\n",
         )
+
+    def test_prepare_orders_by_scope_and_omits_non_changelog_scopes(self):
+        tag(self.repo, "v1.0.0")
+        for message in (
+            "fix: unscoped",
+            "fix(records): legacy scope",
+            "fix(app): in app",
+            "fix(api): in api",
+            "feat(ci): miscategorised tooling",
+            "fix(app): second in app",
+        ):
+            commit_file(self.repo, message)
+        scopes = {"RELEASE_CHANGELOG_SCOPES": "api app", "RELEASE_OMITTED_SCOPES": "ci nix"}
+        with mock.patch.dict(os.environ, scopes):
+            self.assertEqual(main(["prepare"]), 0)
+        self.assertEqual((self.repo / "VERSION").read_text(), "1.0.1\n")
+        changelog = (self.repo / "CHANGELOG.md").read_text()
+        section = changelog[changelog.index("### Bug Fixes:") : changelog.index("## 1.0.0")]
+        self.assertEqual(
+            section,
+            "### Bug Fixes:\n\n"
+            "* **api:** in api by Test\n"
+            "* **app:** second in app by Test\n"
+            "* **app:** in app by Test\n"
+            "* **records:** legacy scope by Test\n"
+            "* unscoped by Test\n\n",
+        )
+        self.assertNotIn("miscategorised", changelog)
 
 
 if __name__ == "__main__":

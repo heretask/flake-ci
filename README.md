@@ -56,6 +56,8 @@ Then run `nix run .#write-files` and commit the generated files.
 | --- | --- | --- |
 | `ci.commits.types.<type>.{title,bump}` | `feat`, `fix`, `improvement`, `perf`, `refactor`, `revert` (bumping); `build`, `chore`, `ci`, `docs`, `style`, `test` | Allowed types, changelog title, SemVer bump (`null` omits from the changelog). Defaults merge per type; replace the set with `lib.mkForce`. |
 | `ci.commits.maxLength` | `72` | Maximum description length in characters, after `type(scope): `. The ` (#123)` suffix of a squash merge does not count. |
+| `ci.commits.scopes.changelog` | `[]` | Scopes allowed on bumping types, in changelog order. Empty allows any scope on any type. |
+| `ci.commits.scopes.other` | `[]` | Scopes allowed only on non-bumping types. The PR-title check and commitlint reject e.g. `feat(nix)`; the changelog drops entries with these scopes and they do not bump the version. |
 | `ci.signoff.enable` | `true` | `signoff` package and app. |
 | `ci.signoff.skipChecks` | `[]` | `checks` attributes `signoff` does not build; `nix flake check` and main's workflow still build them. |
 | `ci.github.enable` | `true` | Generated workflows. |
