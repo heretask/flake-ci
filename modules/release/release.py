@@ -275,7 +275,11 @@ def commit_authors(root: Path, since_tag: str | None) -> dict[str, tuple[str, st
 
 def render_entry(scope: str, summary: str, name: str, email: str, repository_url: str | None) -> str:
     handle = GITHUB_NOREPLY.match(email)
-    author = f"[@{handle[1]}](https://github.com/{handle[1]})" if handle else name
+    if handle and handle[1].endswith("[bot]"):
+        app = handle[1].removesuffix("[bot]")
+        author = f"[@{handle[1]}](https://github.com/apps/{app})"
+    else:
+        author = f"[@{handle[1]}](https://github.com/{handle[1]})" if handle else name
     prefix = f"**{scope}:** " if scope else ""
     pr = PR_SUFFIX.search(summary)
     if pr and repository_url:

@@ -27,7 +27,7 @@
   };
 
   updateInput = input: {schedule}: let
-    title = "chore(nix): update ${input}";
+    title = "chore: update ${input}";
   in {
     name = "Update ${input}";
     on = {
@@ -97,13 +97,12 @@ in
         steps = [
           {
             name = "Lint PR title";
-            env = {
-              PR_TITLE = "\${{ github.event.pull_request.title }}";
-              TITLE_PATTERN = commits.titlePattern;
-            };
+            env.PR_TITLE = "\${{ github.event.pull_request.title }}";
             run = ''
-              if [[ ! "$PR_TITLE" =~ $TITLE_PATTERN ]]; then
-                printf 'Invalid PR title: %s\nExpected pattern: %s\n' "$PR_TITLE" "$TITLE_PATTERN" >&2
+              ${commits.titleCheck}
+
+              if ! problem=$(check_title "$PR_TITLE" 2>&1); then
+                printf '::error title=Invalid PR title::%s Edit the PR title; this check reruns.\n' "$problem"
                 exit 1
               fi
             '';

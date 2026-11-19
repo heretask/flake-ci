@@ -88,7 +88,7 @@ class ReleaseWorkflowsTest(unittest.TestCase):
                 result, output, _ = self.run_step(RESULT, PREPARED=prepared, CHANNEL="")
                 self.assertEqual(result.returncode, 0, result.stderr)
                 expected = f"sha={SHA}\nready=true\n" if prepared == "1" else (
-                    f"sha={SHA}\nready=false\ntitle=chore(release): prepare v1.2.3\n"
+                    f"sha={SHA}\nready=false\ntitle=chore: prepare v1.2.3\n"
                 )
                 self.assertEqual(output, expected)
         self.assertEqual(CREATE_PR["if"], "steps.result.outputs.ready == 'false'")

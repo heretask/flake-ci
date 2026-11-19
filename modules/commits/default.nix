@@ -15,7 +15,7 @@ in {
     types = mkOption {
       description = ''
         Allowed Conventional Commit types. The single source for commitlint,
-        the PR-title pattern, and cog.toml. Defaults merge per type; replace
+        the PR-title check, and cog.toml. Defaults merge per type; replace
         the whole set with `lib.mkForce`.
       '';
       type = types.attrsOf (types.submodule {
@@ -59,18 +59,14 @@ in {
       };
     };
 
-    headerPattern = mkOption {
+    titleCheck = mkOption {
       type = types.str;
       readOnly = true;
       internal = true;
-      description = "Bash regex for `type(scope)!`, the part before `: `.";
-    };
-
-    titlePattern = mkOption {
-      type = types.str;
-      readOnly = true;
-      internal = true;
-      description = "Bash regex for commit subjects and PR titles.";
+      description = ''
+        Bash defining `check_title TITLE [--squash-merged]`, shared by
+        commitlint and the PR-title workflow so both report the same errors.
+      '';
     };
   };
 
@@ -90,15 +86,15 @@ in {
         style = defaultType "Style" null;
         test = defaultType "Tests" null;
       };
-      headerPattern = let
-        alt = builtins.concatStringsSep "|";
+      titleCheck = let
         typesWhere = keep: builtins.attrNames (lib.filterAttrs (_: type: keep type.bump) cfg.types);
-        scope = names:
-          if cfg.scopes.changelog == []
-          then "(\\([^()]+\\))?"
-          else "(\\((${alt names})\\))?";
-      in "((${alt (typesWhere (bump: bump != null))})${scope cfg.scopes.changelog}|(${alt (typesWhere (bump: bump == null))})${scope (cfg.scopes.changelog ++ cfg.scopes.other)})!?";
-      titlePattern = "^${cfg.headerPattern}: .{1,${toString cfg.maxLength}}$";
+      in ''
+        changelog_types=(${lib.escapeShellArgs (typesWhere (bump: bump != null))})
+        other_types=(${lib.escapeShellArgs (typesWhere (bump: bump == null))})
+        changelog_scopes=(${lib.escapeShellArgs cfg.scopes.changelog})
+        other_scopes=(${lib.escapeShellArgs cfg.scopes.other})
+        max_length=${toString cfg.maxLength}
+        ${builtins.readFile ./check-title.sh}'';
     };
 
     perSystem = {pkgs, ...}: let
