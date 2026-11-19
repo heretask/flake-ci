@@ -573,9 +573,7 @@ def cmd_stable(root: Path, config: Config) -> int:
     version = read_version(root, config)
     head = head_sha(root)
     if not matching_rc(root, tags, version, head):
-        status = collect_status(root, config)
-        require_ready(status)
-        version = status.calculated_target
+        raise ReleaseError(f"HEAD is not a release candidate for {version}; stable only promotes an RC commit")
     tag = f"v{version}"
     if tag in tags:
         if peel_tag(root, tag) != head:

@@ -85,7 +85,7 @@ class ReleaseWorkflowsTest(unittest.TestCase):
     def test_preparation_selects_sha_and_requests_pr_only_for_changes(self):
         for prepared in ("1", "0"):
             with self.subTest(prepared=prepared):
-                result, output, _ = self.run_step(RESULT, PREPARED=prepared, CHANNEL="")
+                result, output, _ = self.run_step(RESULT, PREPARED=prepared)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 expected = f"sha={SHA}\nready=true\n" if prepared == "1" else (
                     f"sha={SHA}\nready=false\ntitle=chore: prepare v1.2.3\n"
@@ -100,6 +100,15 @@ class ReleaseWorkflowsTest(unittest.TestCase):
         self.assertEqual(options["title"], "${{ steps.result.outputs.title }}")
         self.assertEqual(options["commit-message"], options["title"])
         self.assertIn("rerun Release", options["body"])
+
+    def test_stable_selects_main_head_without_preparing(self):
+        result, output, commands = self.run_step(RESULT, CHANNEL="stable", PREPARED="0")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(output, f"sha={SHA}\nready=true\n")
+        self.assertEqual(commands, [["git", "rev-parse", "HEAD"]])
+        prepare = next(step for step in PREPARATION["steps"] if step.get("name") == "Prepare release files")
+        self.assertEqual(prepare["if"], "inputs.channel == 'rc'")
+        self.assertEqual(RESULT["env"]["CHANNEL"], "${{ inputs.channel }}")
 
     def test_invalid_channel_is_rejected_before_publication(self):
         result, _, commands = self.run_step(PERFORM, CHANNEL="other")

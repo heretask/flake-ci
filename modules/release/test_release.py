@@ -153,33 +153,25 @@ class ReleaseLifecycleTest(unittest.TestCase):
         self.assertEqual(status.next_rc, "v1.1.0-rc.1")
         self.assertIsNone(status.matching_rc)
 
-    def test_direct_stable(self):
+    def test_stable_requires_rc_at_head(self):
         tag(self.repo, "v1.0.0")
         commit_file(self.repo, "fix: one")
         prepare_and_commit(self.repo, "chore: prepare 1.0.1")
-        sha = head(self.repo)
         before = self.snapshot_release_files()
-        self.assertEqual(main(["stable"]), 0)
-        after = self.snapshot_release_files()
-        self.assertEqual(after[:2], before[:2])
-        self.assertEqual(after[2][0], before[2][0])
-        self.assertEqual(main(["stable"]), 0)
-        self.assertEqual(self.snapshot_release_files(), after)
-        self.assertEqual(head(self.repo), sha)
-        self.assertEqual(run(["git", "rev-parse", "v1.0.1^{commit}"], cwd=self.repo).stdout.strip(), sha)
+        self.assertEqual(main(["stable"]), 1)
+        self.assertEqual(self.snapshot_release_files(), before)
+        self.assertEqual(run(["git", "tag", "--list", "v1.0.1"], cwd=self.repo).stdout, "")
 
-    def test_stable_after_commits_following_rc(self):
+    def test_stable_rejects_chore_after_rc(self):
         tag(self.repo, "v1.0.0")
         commit_file(self.repo, "fix: one")
         prepare_and_commit(self.repo, "chore: prepare 1.0.1")
-        rc_sha = head(self.repo)
         tag(self.repo, "v1.0.1-rc.1")
-        commit_file(self.repo, "fix: two")
-        prepare_and_commit(self.repo, "chore: prepare 1.0.1 again")
-        stable_sha = head(self.repo)
-        self.assertEqual(main(["stable"]), 0)
-        self.assertNotEqual(rc_sha, stable_sha)
-        self.assertEqual(run(["git", "rev-parse", "v1.0.1^{commit}"], cwd=self.repo).stdout.strip(), stable_sha)
+        commit_file(self.repo, "chore: later")
+        before = self.snapshot_release_files()
+        self.assertEqual(main(["stable"]), 1)
+        self.assertEqual(self.snapshot_release_files(), before)
+        self.assertEqual(run(["git", "tag", "--list", "v1.0.1"], cwd=self.repo).stdout, "")
 
     def test_promotion_reuses_rc_commit(self):
         tag(self.repo, "v1.0.0")

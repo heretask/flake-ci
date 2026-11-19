@@ -63,16 +63,24 @@ in
           steps.installNix
           {
             name = "Prepare release files";
+            "if" = "inputs.channel == 'rc'";
             run = "${nixRun} .#release -- prepare";
           }
           {
             name = "Check preparation result";
             id = "result";
+            env.CHANNEL = "\${{ inputs.channel }}";
             run = ''
               set -euo pipefail
 
               sha="$(git rev-parse HEAD)"
               echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+              if [[ "$CHANNEL" == stable ]]; then
+                echo "ready=true" >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+
               if git diff --quiet -- VERSION CHANGELOG.md; then
                 echo "ready=true" >> "$GITHUB_OUTPUT"
               else
@@ -95,7 +103,7 @@ in
               '';
               commit-message = "\${{ steps.result.outputs.title }}";
               title = "\${{ steps.result.outputs.title }}";
-              body = "Merge this PR, wait for Nix to pass, then rerun Release with the desired channel.";
+              body = "Merge this PR, wait for Nix to pass, then rerun Release with the rc channel.";
             };
           }
         ];
