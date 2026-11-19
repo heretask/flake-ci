@@ -13,36 +13,36 @@ in {
     atLimit = "fix(api): ${description "x" commits.maxLength}";
     overLimit = "fix(api): ${description "x" (commits.maxLength + 1)}";
     valid = ["feat(app): validate commit messages" "revert: description" "chore(ci): pin actions" "docs(api)!: drop old guide" atLimit];
-    invalid = ["not conventional" overLimit "feat(ci): changelog type with a non-changelog scope" "fix(other): unknown scope" "chore(other): unknown scope"];
+    invalid = {
+      "not conventional" = ''missing ": " after the type'';
+      "fix(api: unclosed" = ''is not "type", "type(scope)"'';
+      "feature(api): x" = ''unknown type "feature"'';
+      "fix(): x" = ''empty scope'';
+      "fix(other): x" = ''unknown scope "other". Allowed scopes: api app ci'';
+      "feat(ci): x" = ''use a type without a changelog entry, e.g. "chore(ci): x"'';
+      "fix(api):  " = ''description after ": " is empty'';
+      ${overLimit} = ''description is ${toString (commits.maxLength + 1)} characters, the limit is ${toString commits.maxLength}. Shorten it by 1'';
+    };
   in {
     checks = {
-      # commitlint and the PR-title pattern agree on the fixtures.
-      commitlint = pkgs.runCommandLocal "commitlint-check" {inherit (commits) titlePattern;} ''
+      commitlint = pkgs.runCommandLocal "commitlint-check" {} ''
         ${lib.concatMapStringsSep "\n" (title: ''
             printf '%s\n' ${lib.escapeShellArg title} | ${commitlint}
-            if ! [[ ${lib.escapeShellArg title} =~ $titlePattern ]]; then
-              echo ${lib.escapeShellArg "title pattern rejected a valid fixture: ${title}"} >&2
-              exit 1
-            fi
           '')
           valid}
 
-        ${lib.concatMapStringsSep "\n" (title: ''
-            if printf '%s\n' ${lib.escapeShellArg title} | ${commitlint}; then
-              status=0
-            else
-              status=$?
-            fi
-            if [[ $status -ne 1 ]]; then
-              echo ${lib.escapeShellArg "commitlint returned unexpected status $status for an invalid fixture: ${title}"} >&2
+        ${lib.concatStringsSep "\n" (lib.mapAttrsToList (title: message: ''
+            if printf '%s\n' ${lib.escapeShellArg title} | ${commitlint} 2> error; then
+              echo ${lib.escapeShellArg "commitlint accepted an invalid fixture: ${title}"} >&2
               exit 1
             fi
-            if [[ ${lib.escapeShellArg title} =~ $titlePattern ]]; then
-              echo ${lib.escapeShellArg "title pattern accepted an invalid fixture: ${title}"} >&2
+            if ! grep -qF -- ${lib.escapeShellArg message} error; then
+              echo ${lib.escapeShellArg "commitlint did not explain: ${title}; expected: ${message}"} >&2
+              cat error >&2
               exit 1
             fi
           '')
-          invalid}
+          invalid)}
 
         # The limit counts characters, not bytes.
         printf '%s\n' ${lib.escapeShellArg "fix: ${description "æ" commits.maxLength}"} | ${commitlint}
@@ -55,7 +55,8 @@ in {
           exit 1
         fi
         printf '%s\n' ${lib.escapeShellArg "${overLimit} (#1234)"} | ${commitlint} --squash-merged 2> warning
-        grep -q '^warning: description is ${toString (commits.maxLength + 1)} characters' warning
+        grep -qF 'description is ${toString (commits.maxLength + 1)} characters' warning
+        grep -q '^warning: ' warning
         if printf '%s\n' "not conventional (#1234)" | ${commitlint} --squash-merged; then
           echo "commitlint --squash-merged accepted an invalid subject" >&2
           exit 1
