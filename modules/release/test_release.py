@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 import subprocess
 import tempfile
+import tomllib
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
@@ -265,7 +266,7 @@ class ReleaseLifecycleTest(unittest.TestCase):
         self.assertTrue(status.version_matches)
         self.assertTrue(status.changelog_ok)
         text = (self.repo / "CHANGELOG.md").read_text()
-        extra = text.replace("## 1.0.1\n", "## 1.0.1\n\n- tampered\n", 1)
+        extra = text.replace("### Bug Fixes:\n", "### Bug Fixes:\n\n* tampered\n", 1)
         (self.repo / "CHANGELOG.md").write_text(extra)
         run(["git", "add", "CHANGELOG.md"], cwd=self.repo)
         run(["git", "commit", "-m", "chore: extra changelog whitespace"], cwd=self.repo)
@@ -368,11 +369,10 @@ class ReleaseLifecycleTest(unittest.TestCase):
         first_notes = StringIO()
         with redirect_stdout(first_notes):
             self.assertEqual(main(["notes", "v1.1.0-rc.1"]), 0)
-        self.assertTrue(first_notes.getvalue().startswith("## 1.1.0\n"))
+        self.assertTrue(first_notes.getvalue().startswith("## [v1.1.0]("))
         self.assertIn("first candidate feature", first_notes.getvalue())
 
         commit_file(self.repo, "fix: second candidate fix")
-        fix_sha = head(self.repo)
         commit_file(self.repo, "chore: internal cleanup")
         prepare_and_commit(self.repo, "chore: prepare second candidate")
         for release_tag in ("v1.1.0-rc.2", "v1.1.0"):
@@ -385,10 +385,10 @@ class ReleaseLifecycleTest(unittest.TestCase):
             if "-rc." in release_tag:
                 self.assertEqual(
                     output.getvalue(),
-                    f"## Changes since v1.1.0-rc.1\n\n- {fix_sha} - second candidate fix\n",
+                    "## Changes since v1.1.0-rc.1\n\n### Bug Fixes:\n\n* second candidate fix by Test\n",
                 )
             else:
-                self.assertTrue(output.getvalue().startswith("## 1.1.0\n"))
+                self.assertTrue(output.getvalue().startswith("## [v1.1.0]("))
                 self.assertIn("first candidate feature", output.getvalue())
                 self.assertIn("second candidate fix", output.getvalue())
             self.assertNotIn("internal cleanup", output.getvalue())
@@ -404,7 +404,6 @@ class ReleaseLifecycleTest(unittest.TestCase):
         tag(self.repo, "v1.0.0-rc.11")
         run(["git", "checkout", "main"], cwd=self.repo)
         commit_file(self.repo, "fix: new candidate change")
-        candidate_sha = head(self.repo)
         for release_tag in ("v1.0.0-rc.12", "v1.0.0-rc.13", "v2.0.0-rc.11"):
             tag(self.repo, release_tag)
         output = StringIO()
@@ -412,7 +411,7 @@ class ReleaseLifecycleTest(unittest.TestCase):
             self.assertEqual(main(["notes", "v1.0.0-rc.12"]), 0)
         self.assertEqual(
             output.getvalue(),
-            f"## Changes since v1.0.0-rc.10\n\n- {candidate_sha} - new candidate change\n",
+            "## Changes since v1.0.0-rc.10\n\n### Bug Fixes:\n\n* new candidate change by Test\n",
         )
 
     def test_rc_notes_fall_back_to_full_section_without_eligible_predecessor(self):
@@ -464,7 +463,7 @@ class ReleaseLifecycleTest(unittest.TestCase):
         (self.repo / "TARGET_VERSION").write_text("3.0.0\n")
         self.assertEqual(main(["--version-file", "TARGET_VERSION", "prepare"]), 0)
         self.assertEqual((self.repo / "TARGET_VERSION").read_text(), "3.0.0\n")
-        self.assertIn("## 3.0.0\n", (self.repo / "CHANGELOG.md").read_text())
+        self.assertIn("## v3.0.0\n", (self.repo / "CHANGELOG.md").read_text())
         self.assertFalse((self.repo / "VERSION").exists())
 
     def test_prepare_writes_first_release_and_is_idempotent(self):
@@ -472,7 +471,7 @@ class ReleaseLifecycleTest(unittest.TestCase):
         self.assertEqual(main(["prepare"]), 0)
         self.assertEqual((self.repo / "VERSION").read_text(), "1.0.0\n")
         changelog = (self.repo / "CHANGELOG.md").read_text()
-        self.assertIn("## 1.0.0\n", changelog)
+        self.assertIn("## v1.0.0\n", changelog)
         self.assertNotIn("-rc.", changelog)
         self.assertEqual(main(["prepare"]), 0)
         self.assertEqual((self.repo / "CHANGELOG.md").read_text(), changelog)
@@ -510,8 +509,8 @@ class ReleaseLifecycleTest(unittest.TestCase):
         self.assertEqual(self.git_log_and_tags(), before)
         self.assertEqual((self.repo / "VERSION").read_text(), "1.1.0\n")
         changelog = (self.repo / "CHANGELOG.md").read_text()
-        self.assertIn("## 1.1.0\n", changelog)
-        self.assertNotIn("## 1.0.1\n", changelog)
+        self.assertIn("## [v1.1.0](", changelog)
+        self.assertNotIn("## [v1.0.1]", changelog)
         self.assertTrue(changelog.endswith(history))
         self.assertIn("one", changelog)
         self.assertIn("two", changelog)
@@ -535,6 +534,28 @@ class ReleaseLifecycleTest(unittest.TestCase):
         self.assertEqual(main(["prepare"]), 1)
         self.assertEqual((self.repo / "VERSION").read_text(), version)
         self.assertEqual((self.repo / "CHANGELOG.md").read_text(), changelog)
+
+    def test_prepare_groups_entries_and_links_authors_and_pull_requests(self):
+        tag(self.repo, "v1.0.0")
+        noreply = {"GIT_AUTHOR_NAME": "Octo Cat", "GIT_AUTHOR_EMAIL": "123+octocat@users.noreply.github.com"}
+        run(["git", "commit", "--allow-empty", "-m", "fix(api): repair thing (#42)"], cwd=self.repo, env=noreply)
+        run(["git", "commit", "--allow-empty", "-m", "feat: add thing"], cwd=self.repo)
+        run(["git", "commit", "--allow-empty", "-m", "chore!: drop old thing"], cwd=self.repo)
+        run(["git", "commit", "--allow-empty", "-m", "chore: tidy"], cwd=self.repo)
+        date = run(["git", "log", "-1", "--format=%cs", "HEAD~1"], cwd=self.repo).stdout.strip()
+        self.assertEqual(main(["prepare"]), 0)
+        changelog = (self.repo / "CHANGELOG.md").read_text()
+        cog = tomllib.loads((self.repo / "cog.toml").read_text())["changelog"]
+        url = f"https://{cog['remote']}/{cog['owner']}/{cog['repository']}"
+        section = changelog[changelog.index("## [v2.0.0]") : changelog.index("## 1.0.0")]
+        self.assertEqual(
+            section,
+            f"## [v2.0.0]({url}/compare/v1.0.0...v2.0.0) ({date})\n\n"
+            "### Breaking Changes:\n\n* drop old thing by Test\n\n"
+            "### Features:\n\n* add thing by Test\n\n"
+            "### Bug Fixes:\n\n"
+            f"* repair thing by [@octocat](https://github.com/octocat) [(#42)]({url}/pull/42)\n\n",
+        )
 
 
 if __name__ == "__main__":

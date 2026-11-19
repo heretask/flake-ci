@@ -15,7 +15,10 @@ from typing import Mapping, Sequence
 STABLE_TAG = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
 RC_TAG = re.compile(r"^v(\d+)\.(\d+)\.(\d+)-rc\.(\d+)$")
 STABLE_VERSION = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
-CHANGELOG_HEADING = re.compile(r"^## (\d+\.\d+\.\d+(?:-rc\.\d+)?)\s*$", re.MULTILINE)
+CHANGELOG_HEADING = re.compile(r"^## \[?v?(\d+\.\d+\.\d+(?:-rc\.\d+)?)\b.*$", re.MULTILINE)
+PR_SUFFIX = re.compile(r"\s*\(#(\d+)\)$")
+GITHUB_NOREPLY = re.compile(r"^(?:\d+\+)?([^@]+)@users\.noreply\.github\.com$")
+BREAKING_TITLE = "Breaking Changes"
 
 COMMIT_TEMPLATE = (
     "{% for commit in commits %}"
@@ -79,7 +82,8 @@ class Config:
 @dataclass(frozen=True)
 class CommitPolicy:
     impact_by_title: Mapping[str, str | None]
-    changelog_titles: frozenset[str]
+    changelog_titles: tuple[str, ...]
+    repository_url: str | None
 
 
 def git_env() -> dict[str, str]:
@@ -211,7 +215,7 @@ def load_commit_policy(root: Path) -> CommitPolicy:
     if not isinstance(raw, dict) or not raw:
         raise ReleaseError("cog.toml must define [commit_types]")
     impact_by_title: dict[str, str | None] = {}
-    changelog_titles: set[str] = set()
+    changelog_titles: list[str] = []
     for name, spec in raw.items():
         if not isinstance(spec, dict):
             raise ReleaseError(f"commit type {name!r} must be a table")
@@ -232,8 +236,15 @@ def load_commit_policy(root: Path) -> CommitPolicy:
             impact = None
         impact_by_title[title] = impact
         if not omit:
-            changelog_titles.add(title)
-    return CommitPolicy(impact_by_title=impact_by_title, changelog_titles=frozenset(changelog_titles))
+            changelog_titles.append(title)
+    changelog = data.get("changelog", {})
+    remote, owner, repository = (changelog.get(key) for key in ("remote", "owner", "repository"))
+    repository_url = f"https://{remote}/{owner}/{repository}" if remote and owner and repository else None
+    return CommitPolicy(
+        impact_by_title=impact_by_title,
+        changelog_titles=tuple(changelog_titles),
+        repository_url=repository_url,
+    )
 
 
 def parse_commit_line(line: str) -> tuple[str, bool, str, str] | None:
@@ -247,13 +258,34 @@ def parse_commit_line(line: str) -> tuple[str, bool, str, str] | None:
     return kind, breaking, commit_id, summary
 
 
+def commit_authors(root: Path, since_tag: str | None) -> dict[str, tuple[str, str, str]]:
+    revisions = f"{since_tag}..HEAD" if since_tag else "HEAD"
+    output = git(["log", "--format=%H%x09%an%x09%ae%x09%cs", revisions], cwd=root).stdout
+    authors = {}
+    for line in output.splitlines():
+        sha, name, email, date = line.split("\t")
+        authors[sha] = (name, email, date)
+    return authors
+
+
+def render_entry(summary: str, name: str, email: str, repository_url: str | None) -> str:
+    handle = GITHUB_NOREPLY.match(email)
+    author = f"[@{handle[1]}](https://github.com/{handle[1]})" if handle else name
+    pr = PR_SUFFIX.search(summary)
+    if pr and repository_url:
+        return f"* {summary[: pr.start()]} by {author} [(#{pr[1]})]({repository_url}/pull/{pr[1]})"
+    return f"* {summary} by {author}"
+
+
 def changes_since(
     root: Path, since_tag: str | None, policy: CommitPolicy
-) -> tuple[list[str], str]:
+) -> tuple[list[str], str, str | None]:
     cog_check(root, since_tag)
     output = cog_template(root, since_tag, COMMIT_TEMPLATE)
+    authors = commit_authors(root, since_tag)
     impacts = []
-    lines = []
+    sections: dict[str, list[str]] = {title: [] for title in (BREAKING_TITLE, *policy.changelog_titles)}
+    dates = []
     for line in output.splitlines():
         parsed = parse_commit_line(line)
         if parsed is None:
@@ -262,15 +294,19 @@ def changes_since(
         impact = "major" if breaking else policy.impact_by_title.get(kind)
         if impact:
             impacts.append(impact)
-        if breaking or kind in policy.changelog_titles:
-            lines.append(f"- {commit_id} - {summary}")
-    return impacts, "\n".join(lines)
+        title = BREAKING_TITLE if breaking else kind
+        if title in sections:
+            name, email, date = authors[commit_id]
+            sections[title].append(render_entry(summary, name, email, policy.repository_url))
+            dates.append(date)
+    body = "\n\n".join(f"### {title}:\n\n" + "\n".join(lines) for title, lines in sections.items() if lines)
+    return impacts, body, max(dates, default=None)
 
 
 def release_content(
     root: Path, config: Config, latest: Version | None, since_tag: str | None, policy: CommitPolicy
-) -> tuple[Version, str]:
-    impacts, body = changes_since(root, since_tag, policy)
+) -> tuple[Version, str, str | None]:
+    impacts, body, date = changes_since(root, since_tag, policy)
     rank = {"patch": 1, "minor": 2, "major": 3}
     if latest is None:
         target = read_version(root, config)
@@ -280,7 +316,7 @@ def release_content(
         target = Version(1, 0, 0)
     else:
         target = latest.bump(max(impacts, key=lambda impact: rank[impact]))
-    return target, body
+    return target, body, date
 
 
 def split_changelog(text: str) -> tuple[str, list[tuple[str, str]]]:
@@ -296,11 +332,18 @@ def split_changelog(text: str) -> tuple[str, list[tuple[str, str]]]:
     return prefix, sections
 
 
-def render_section(version: Version, body: str) -> str:
+def render_section(
+    version: Version, body: str, date: str | None, since_tag: str | None, repository_url: str | None
+) -> str:
+    heading = f"v{version}"
+    if since_tag and repository_url:
+        heading = f"[{heading}]({repository_url}/compare/{since_tag}...{heading})"
+    if date:
+        heading += f" ({date})"
     notes = body.strip()
     if notes:
-        return f"## {version}\n\n{notes}\n"
-    return f"## {version}\n"
+        return f"## {heading}\n\n{notes}\n"
+    return f"## {heading}\n"
 
 
 def expected_files(
@@ -309,7 +352,7 @@ def expected_files(
     latest_version = latest[0] if latest else None
     since = latest[1] if latest else None
     policy = load_commit_policy(root)
-    target, body = release_content(root, config, latest_version, since, policy)
+    target, body, date = release_content(root, config, latest_version, since, policy)
     changelog_path = root / config.changelog_file
     current = changelog_path.read_text() if changelog_path.exists() else "# Changelog\n"
     prefix, sections = split_changelog(current)
@@ -326,7 +369,7 @@ def expected_files(
         if version.tuple <= latest_version.tuple:
             preserved.append(section)
     if latest_version is None or target != latest_version:
-        prospective = render_section(target, body)
+        prospective = render_section(target, body, date, since, policy.repository_url)
         parts = [prefix.rstrip("\n") + "\n\n", prospective]
         if preserved:
             history = "".join(preserved)
@@ -338,7 +381,7 @@ def expected_files(
         if preserved:
             changelog = prefix + "".join(preserved)
         else:
-            changelog = prefix.rstrip("\n") + "\n\n" + render_section(target, body)
+            changelog = prefix.rstrip("\n") + "\n\n" + render_section(target, body, date, None, policy.repository_url)
     if not changelog.endswith("\n"):
         changelog += "\n"
     return target, f"{target}\n", changelog
@@ -475,7 +518,7 @@ def cmd_notes(root: Path, config: Config, tag: str) -> int:
         if heading == str(version):
             previous = previous_rc(root, *rc) if rc else None
             if previous:
-                _, body = changes_since(root, previous, load_commit_policy(root))
+                _, body, _ = changes_since(root, previous, load_commit_policy(root))
                 body = body or "No changelog entries since this RC."
                 section = f"## Changes since {previous}\n\n{body}\n"
             print(section, end="")
