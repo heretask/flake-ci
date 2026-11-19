@@ -115,6 +115,22 @@ in {
         };
           pkgs.runCommandLocal "flake-check-job" {} "touch $out";
 
+      # separateChecks builds each listed check in its own job; flake-check builds the rest.
+      separate-checks = let
+        jobs = github.workflows.nix-check.jobs;
+        lastRun = job: (lib.last job.steps).run;
+        separate = jobs.check-commitlint;
+      in
+        assert github.flakeCheck.separateChecks == ["commitlint"];
+        assert builtins.attrNames jobs == ["check-commitlint" "flake-check"];
+        assert separate.name == "commitlint";
+        assert separate.runs-on == github.flakeCheck.runner;
+        assert separate.permissions == jobs.flake-check.permissions;
+        assert lib.hasInfix ''".#checks.$system.\"commitlint\""'' (lastRun separate);
+        assert lib.hasInfix "nix flake check -L --option accept-flake-config false --no-build" (lastRun jobs.flake-check);
+        assert lib.hasInfix "declare -A separate=([commitlint]=1 )" (lastRun jobs.flake-check);
+          pkgs.runCommandLocal "separate-checks" {} "touch $out";
+
       # cache = "hestia" swaps the flake-check cache step and adds what hestia needs.
       hestia-cache = let
         flakeCheck = github.workflows.nix-check.jobs.flake-check;

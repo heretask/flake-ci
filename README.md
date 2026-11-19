@@ -67,6 +67,7 @@ Then run `nix run .#write-files` and commit the generated files.
 | `ci.github.flakeCheck.timeoutMinutes` | `30` | Timeout in minutes for the flake-check job. |
 | `ci.github.flakeCheck.reclaimDisk` | `"foreground"` | `"background"` frees preinstalled toolchains from the runner disk without blocking the flake-check job. See [Runner disk](#runner-disk). |
 | `ci.github.flakeCheck.queue` | `false` | `true` runs main's flake checks one at a time in push order. See [Queued checks](#queued-checks). |
+| `ci.github.flakeCheck.separateChecks` | `[]` | `checks` attributes main's flake check builds each in its own job. See [Separate checks](#separate-checks). |
 | `ci.github.cache` | `"magic-nix-cache"` | Nix binary cache for flake-check jobs: `"magic-nix-cache"` or `"hestia"`. |
 | `ci.github.darwinCheck` | `false` | Manually dispatched flake check on macOS. |
 | `ci.github.extraNixConfig` | `""` | Extra `nix.conf` lines for the Nix installer, e.g. binary caches. |
@@ -94,6 +95,10 @@ GitHub's `ubuntu-24.04` runner starts with about 14 GB free. The flake-check job
 ## Queued checks
 
 By default each push to `main` gets its own flake-check run, and runs overlap. A run uploads its builds to the cache only when it finishes, so a run that starts while another is still building rebuilds the same derivations. With `ci.github.flakeCheck.queue = true;` the workflow uses one concurrency group per branch with GitHub's `queue: max`: runs wait and start one at a time, oldest first, so each one reuses what the previous run uploaded. Every commit still gets its own result, up to 100 waiting runs, which matters if a release checks for a successful run on an exact commit. A burst of pushes now takes longer to reach the newest commit, since its run waits for the ones before it.
+
+## Separate checks
+
+One flake-check job builds every check in parallel on one runner. Checks that each need much memory or CPU, such as test suites with their own database or NixOS VM tests, can then starve each other: tests time out, or GitHub stops the runner with `The runner has received a shutdown signal`. With `ci.github.flakeCheck.separateChecks = ["api-test" "vm-test"];` each listed check gets its own job and runner, named after the check, and runs `nix build` of `checks.<system>.<name>`. The flake-check job runs `nix flake check --no-build`, then builds every other check of its system. All jobs share the runner, timeout, disk and cache settings of the flake-check job. Jobs build shared dependencies concurrently until the cache holds them.
 
 ## Development
 

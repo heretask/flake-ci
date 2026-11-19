@@ -55,6 +55,17 @@ in {
       '';
     };
 
+    flakeCheck.separateChecks = mkOption {
+      type = types.listOf types.str;
+      default = [];
+      example = ["api-test" "vm-test"];
+      description = ''
+        `checks` attributes of the runner's system that main's flake check builds in their own job,
+        each on its own runner. The flake-check job evaluates the flake and builds the other checks.
+        Use it for checks that need much memory or CPU and starve each other on one runner.
+      '';
+    };
+
     cache = mkOption {
       type = types.enum ["magic-nix-cache" "hestia"];
       default = "magic-nix-cache";

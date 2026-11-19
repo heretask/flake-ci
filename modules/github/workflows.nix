@@ -5,7 +5,8 @@
   lib,
 }: let
   steps = import ./steps.nix {inherit (cfg) extraNixConfig;};
-  inherit (steps) flakeCheck nixRun;
+  inherit (steps) flakeCheck nixBuild nixEval nixRun;
+  separateChecks = cfg.flakeCheck.separateChecks;
   hestiaCache = cfg.cache == "hestia";
   cacheStep =
     if hestiaCache
@@ -13,12 +14,54 @@
     else steps.magicCache;
   # hestia uploads for up to 300 s after the step, even on failure; keep that inside the job timeout.
   flakeCheckTimeout = lib.throwIf (hestiaCache && cfg.flakeCheck.timeoutMinutes <= 10) "ci.github.flakeCheck.timeoutMinutes must be above 10 with ci.github.cache = \"hestia\"" cfg.flakeCheck.timeoutMinutes;
+  stepTimeout = jobTimeout: lib.optionalAttrs hestiaCache {timeout-minutes = jobTimeout - 10;};
   checkFlake = jobTimeout:
     {
       name = "Check flake";
       run = flakeCheck;
     }
-    // lib.optionalAttrs hestiaCache {timeout-minutes = jobTimeout - 10;};
+    // stepTimeout jobTimeout;
+  currentSystem = ''system="$(nix eval --impure --raw --expr builtins.currentSystem)"'';
+  # Evaluates everything, then builds the checks the separate jobs do not.
+  checkFlakeExceptSeparate =
+    {
+      name = "Check flake";
+      run = ''
+        ${flakeCheck} --no-build
+        ${currentSystem}
+        names="$(${nixEval} --raw ".#checks.$system" --apply 'checks: builtins.concatStringsSep "\n" (builtins.attrNames checks)')"
+        declare -A separate=(${lib.concatMapStrings (name: "[${lib.escapeShellArg name}]=1 ") separateChecks})
+        installables=()
+        while IFS= read -r name; do
+          if [[ -z "''${separate[$name]:-}" ]]; then
+            installables+=(".#checks.$system.\"$name\"")
+          fi
+        done <<< "$names"
+        if (( ''${#installables[@]} )); then
+          ${nixBuild} "''${installables[@]}"
+        fi
+      '';
+    }
+    // stepTimeout flakeCheckTimeout;
+  flakeCheckJob = name: checkStep:
+    {
+      inherit name;
+      runs-on = cfg.flakeCheck.runner;
+      timeout-minutes = flakeCheckTimeout;
+      steps =
+        [
+          steps.checkout
+          (
+            if cfg.flakeCheck.reclaimDisk == "background"
+            then steps.reclaimDiskInBackground
+            else steps.reclaimDisk
+          )
+          steps.installNix
+          cacheStep
+        ]
+        ++ checkStep;
+    }
+    // hestiaJobPermissions;
   hestiaJobPermissions = lib.optionalAttrs hestiaCache {
     permissions = {
       actions = "read";
@@ -126,20 +169,9 @@ in
           group = "\${{ github.workflow }}-\${{ github.sha }}";
           cancel-in-progress = true;
         };
-      jobs.flake-check =
+      jobs =
         {
-          name = "flake-check";
-          runs-on = cfg.flakeCheck.runner;
-          timeout-minutes = flakeCheckTimeout;
-          steps = [
-            steps.checkout
-            (
-              if cfg.flakeCheck.reclaimDisk == "background"
-              then steps.reclaimDiskInBackground
-              else steps.reclaimDisk
-            )
-            steps.installNix
-            cacheStep
+          flake-check = flakeCheckJob "flake-check" [
             {
               name = "Lint pushed commit";
               "if" = "github.event_name == 'push'";
@@ -149,10 +181,25 @@ in
                   ${nixRun} .#commitlint -- --squash-merged
               '';
             }
-            (checkFlake flakeCheckTimeout)
+            (
+              if separateChecks == []
+              then checkFlake flakeCheckTimeout
+              else checkFlakeExceptSeparate
+            )
           ];
         }
-        // hestiaJobPermissions;
+        // lib.listToAttrs (map (check:
+          lib.nameValuePair "check-${check}" (flakeCheckJob check [
+            ({
+                name = "Build ${check}";
+                run = ''
+                  ${currentSystem}
+                  ${nixBuild} ".#checks.$system.\"${check}\""
+                '';
+              }
+              // stepTimeout flakeCheckTimeout)
+          ]))
+        separateChecks);
     };
   }
   // lib.optionalAttrs cfg.darwinCheck {

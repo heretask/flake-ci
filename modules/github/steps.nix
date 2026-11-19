@@ -92,4 +92,6 @@ in {
   # Flake config from the checkout is never trusted in CI.
   nixRun = "nix run --option accept-flake-config false";
   flakeCheck = "nix flake check -L --option accept-flake-config false";
+  nixBuild = "nix build -L --no-link --option accept-flake-config false";
+  nixEval = "nix eval --option accept-flake-config false";
 }
