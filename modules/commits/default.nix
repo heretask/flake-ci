@@ -38,6 +38,34 @@ in {
       description = "Maximum description length after `type(scope): `.";
     };
 
+    scopes = {
+      changelog = mkOption {
+        type = types.listOf types.str;
+        default = [];
+        example = ["api" "app"];
+        description = ''
+          Scopes allowed on changelog types (those with a bump), in changelog
+          order. Empty allows any scope on any type.
+        '';
+      };
+      other = mkOption {
+        type = types.listOf types.str;
+        default = [];
+        example = ["nix" "ci"];
+        description = ''
+          Scopes allowed only on non-changelog types. Commits with these scopes
+          are left out of the changelog and do not bump the version.
+        '';
+      };
+    };
+
+    headerPattern = mkOption {
+      type = types.str;
+      readOnly = true;
+      internal = true;
+      description = "Bash regex for `type(scope)!`, the part before `: `.";
+    };
+
     titlePattern = mkOption {
       type = types.str;
       readOnly = true;
@@ -62,7 +90,15 @@ in {
         style = defaultType "Style" null;
         test = defaultType "Tests" null;
       };
-      titlePattern = "^(${builtins.concatStringsSep "|" (builtins.attrNames cfg.types)})(\\([^()]+\\))?!?: .{1,${toString cfg.maxLength}}$";
+      headerPattern = let
+        alt = builtins.concatStringsSep "|";
+        typesWhere = keep: builtins.attrNames (lib.filterAttrs (_: type: keep type.bump) cfg.types);
+        scope = names:
+          if cfg.scopes.changelog == []
+          then "(\\([^()]+\\))?"
+          else "(\\((${alt names})\\))?";
+      in "((${alt (typesWhere (bump: bump != null))})${scope cfg.scopes.changelog}|(${alt (typesWhere (bump: bump == null))})${scope (cfg.scopes.changelog ++ cfg.scopes.other)})!?";
+      titlePattern = "^${cfg.headerPattern}: .{1,${toString cfg.maxLength}}$";
     };
 
     perSystem = {pkgs, ...}: let

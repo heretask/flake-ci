@@ -27,6 +27,10 @@
           };
           notify.repository = "example/ops";
         };
+        ci.commits.scopes = {
+          changelog = ["api" "app"];
+          other = ["ci"];
+        };
         # All differ from their defaults so the fixture-flake-check-job check can tell them apart.
         ci.github.flakeCheck = {
           runner = "ubuntu-22.04";

@@ -22,7 +22,8 @@ BREAKING_TITLE = "Breaking Changes"
 
 COMMIT_TEMPLATE = (
     "{% for commit in commits %}"
-    "{{ commit.type }}\t{{ commit.breaking_change }}\t{{ commit.id }}\t{{ commit.summary }}\n"
+    "{{ commit.type }}\t{{ commit.breaking_change }}\t{{ commit.scope | default(value='') }}\t"
+    "{{ commit.id }}\t{{ commit.summary }}\n"
     "{% endfor %}"
 )
 
@@ -84,6 +85,8 @@ class CommitPolicy:
     impact_by_title: Mapping[str, str | None]
     changelog_titles: tuple[str, ...]
     repository_url: str | None
+    changelog_scopes: tuple[str, ...]
+    omitted_scopes: frozenset[str]
 
 
 def git_env() -> dict[str, str]:
@@ -244,18 +247,20 @@ def load_commit_policy(root: Path) -> CommitPolicy:
         impact_by_title=impact_by_title,
         changelog_titles=tuple(changelog_titles),
         repository_url=repository_url,
+        changelog_scopes=tuple(os.environ.get("RELEASE_CHANGELOG_SCOPES", "").split()),
+        omitted_scopes=frozenset(os.environ.get("RELEASE_OMITTED_SCOPES", "").split()),
     )
 
 
-def parse_commit_line(line: str) -> tuple[str, bool, str, str] | None:
+def parse_commit_line(line: str) -> tuple[str, bool, str, str, str] | None:
     if not line.strip() or "\t" not in line:
         return None
-    parts = line.split("\t", 3)
-    if len(parts) < 4:
+    parts = line.split("\t", 4)
+    if len(parts) < 5:
         raise ReleaseError(f"malformed cog changelog line: {line!r}")
-    kind, breaking_text, commit_id, summary = parts
+    kind, breaking_text, scope, commit_id, summary = parts
     breaking = breaking_text.strip().lower() == "true"
-    return kind, breaking, commit_id, summary
+    return kind, breaking, scope, commit_id, summary
 
 
 def commit_authors(root: Path, since_tag: str | None) -> dict[str, tuple[str, str, str]]:
@@ -268,13 +273,20 @@ def commit_authors(root: Path, since_tag: str | None) -> dict[str, tuple[str, st
     return authors
 
 
-def render_entry(summary: str, name: str, email: str, repository_url: str | None) -> str:
+def render_entry(scope: str, summary: str, name: str, email: str, repository_url: str | None) -> str:
     handle = GITHUB_NOREPLY.match(email)
     author = f"[@{handle[1]}](https://github.com/{handle[1]})" if handle else name
+    prefix = f"**{scope}:** " if scope else ""
     pr = PR_SUFFIX.search(summary)
     if pr and repository_url:
-        return f"* {summary[: pr.start()]} by {author} [(#{pr[1]})]({repository_url}/pull/{pr[1]})"
-    return f"* {summary} by {author}"
+        return f"* {prefix}{summary[: pr.start()]} by {author} [(#{pr[1]})]({repository_url}/pull/{pr[1]})"
+    return f"* {prefix}{summary} by {author}"
+
+
+def scope_order(policy: CommitPolicy, scope: str) -> tuple[int, int, str]:
+    if scope in policy.changelog_scopes:
+        return 0, policy.changelog_scopes.index(scope), ""
+    return (1, 0, scope) if scope else (2, 0, "")
 
 
 def changes_since(
@@ -284,22 +296,28 @@ def changes_since(
     output = cog_template(root, since_tag, COMMIT_TEMPLATE)
     authors = commit_authors(root, since_tag)
     impacts = []
-    sections: dict[str, list[str]] = {title: [] for title in (BREAKING_TITLE, *policy.changelog_titles)}
+    sections: dict[str, list[tuple[str, str]]] = {title: [] for title in (BREAKING_TITLE, *policy.changelog_titles)}
     dates = []
     for line in output.splitlines():
         parsed = parse_commit_line(line)
         if parsed is None:
             continue
-        kind, breaking, commit_id, summary = parsed
+        kind, breaking, scope, commit_id, summary = parsed
+        if scope in policy.omitted_scopes:
+            continue
         impact = "major" if breaking else policy.impact_by_title.get(kind)
         if impact:
             impacts.append(impact)
         title = BREAKING_TITLE if breaking else kind
         if title in sections:
             name, email, date = authors[commit_id]
-            sections[title].append(render_entry(summary, name, email, policy.repository_url))
+            sections[title].append((scope, render_entry(scope, summary, name, email, policy.repository_url)))
             dates.append(date)
-    body = "\n\n".join(f"### {title}:\n\n" + "\n".join(lines) for title, lines in sections.items() if lines)
+    body = "\n\n".join(
+        f"### {title}:\n\n" + "\n".join(line for _, line in sorted(entries, key=lambda e: scope_order(policy, e[0])))
+        for title, entries in sections.items()
+        if entries
+    )
     return impacts, body, max(dates, default=None)
 
 

@@ -66,7 +66,10 @@ in {
     };
 
     perSystem = {pkgs, ...}: let
-      release = import ./package.nix {inherit pkgs;};
+      release = import ./package.nix {
+        inherit pkgs;
+        inherit (config.ci.commits) scopes;
+      };
     in {
       files.file."cog.toml".source = import ./cog-toml.nix {
         inherit lib pkgs;

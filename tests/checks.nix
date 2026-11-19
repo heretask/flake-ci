@@ -10,10 +10,10 @@ in {
   }: let
     commitlint = lib.getExe config.packages.commitlint;
     description = char: length: lib.concatStrings (lib.genList (_: char) length);
-    atLimit = "fix(ci): ${description "x" commits.maxLength}";
-    overLimit = "fix(ci): ${description "x" (commits.maxLength + 1)}";
-    valid = ["feat(ci): validate commit messages" "revert(scope): description" atLimit];
-    invalid = ["not conventional" overLimit];
+    atLimit = "fix(api): ${description "x" commits.maxLength}";
+    overLimit = "fix(api): ${description "x" (commits.maxLength + 1)}";
+    valid = ["feat(app): validate commit messages" "revert: description" "chore(ci): pin actions" "docs(api)!: drop old guide" atLimit];
+    invalid = ["not conventional" overLimit "feat(ci): changelog type with a non-changelog scope" "fix(other): unknown scope" "chore(other): unknown scope"];
   in {
     checks = {
       # commitlint and the PR-title pattern agree on the fixtures.

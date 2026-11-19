@@ -8,7 +8,7 @@ jobs:
     steps:
     - env:
         PR_TITLE: ${{ github.event.pull_request.title }}
-        TITLE_PATTERN: '^(build|chore|ci|docs|feat|fix|improvement|perf|refactor|revert|style|test)(\([^()]+\))?!?:
+        TITLE_PATTERN: '^((feat|fix|improvement|perf|refactor|revert)(\([^()]+\))?|(build|chore|ci|docs|style|test)(\([^()]+\))?)!?:
           .{1,72}$'
       name: Lint PR title
       run: |-

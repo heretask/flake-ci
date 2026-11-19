@@ -47,6 +47,12 @@ in
 
       printf '%s%s\n' "$subject" "$rest" | commitlint --config ${config}
 
+      header_pattern=${pkgs.lib.escapeShellArg "^${commits.headerPattern}$"}
+      if [[ ! "''${subject%%: *}" =~ $header_pattern ]]; then
+        echo "type or scope not allowed: ''${subject%%: *}" >&2
+        exit 1
+      fi
+
       # Count characters in any locale: drop the UTF-8 continuation bytes.
       description=''${subject#*: }
       LC_ALL=C
