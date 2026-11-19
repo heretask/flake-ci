@@ -4,7 +4,7 @@ A [flake-parts](https://flake.parts) module for repository automation, configure
 
 - **Commit convention**: one list of Conventional Commit types drives commitlint (`nix run .#commitlint`), the PR-title check, and `cog.toml`.
 - **Signoff**: `nix run .#signoff` runs `nix flake check`, then marks the tested commit with [gh-signoff](https://github.com/basecamp/gh-signoff). Works from Git and Jujutsu. With `ci.signoff.skipChecks` set, it runs `nix flake check --no-build`, builds every other check of the current system in one `nix build`, and names the skipped checks.
-- **Releases**: `nix run .#release` prepares `VERSION`/`CHANGELOG.md` with [cocogitto](https://github.com/cocogitto/cocogitto), tags rc and stable releases, and advances channel branches from a dispatched workflow.
+- **Releases**: `nix run .#release` prepares `VERSION`/`CHANGELOG.md` with [cocogitto](https://github.com/cocogitto/cocogitto), tags rc and stable releases, and advances channel branches from a dispatched workflow. Changelog sections follow the [Ash](https://github.com/ash-project/ash/blob/main/CHANGELOG.md) style: a compare link and the date of the newest entry in the heading, breaking changes first, then one section per commit type in `cog.toml` order, each entry crediting its author (`@handle` for GitHub noreply emails) and linking the `(#N)` pull request.
 - **GitHub workflows**: PR-title lint, flake check on `main`, optional macOS check, scheduled flake-input update PRs, and release workflows, rendered into `.github/workflows`.
 - **Nix formatting**: alejandra, statix, and deadnix through [treefmt-nix](https://github.com/numtide/treefmt-nix).
 
