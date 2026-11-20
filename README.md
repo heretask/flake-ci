@@ -9,7 +9,7 @@ A [flake-parts](https://flake.parts) module for repository automation, configure
 - **GitHub workflows**: PR-title lint, flake check on `main`, optional macOS check, scheduled flake-input update PRs, and release workflows, rendered into `.github/workflows`.
 - **Nix formatting**: alejandra, statix, and deadnix through [treefmt-nix](https://github.com/numtide/treefmt-nix).
 
-Generated files (workflows, `cog.toml`) are committed and written by [mightyiam/files](https://github.com/mightyiam/files): `nix run .#write-files` regenerates them, and each has a `files:<path>` check that fails when it is stale. `checks.workflow-orphans` fails on workflow files that no `ci.github.workflows` entry owns.
+Generated files (workflows, `cog.toml`) are committed and written by [mightyiam/files](https://github.com/mightyiam/files): `nix run .#write-files` regenerates them, and each has a `files:<path>` check that fails when it is stale. A check depends only on its own committed file and what generates it, so a binary cache skips it on commits that touch neither. `checks.workflow-orphans` fails on workflow files that no `ci.github.workflows` entry owns.
 
 ## Use
 
@@ -106,7 +106,7 @@ With `ci.github.flakeCheck.matrix = true;` (and `ci.github.cache = "hestia";`) t
 - `eval` evaluates the flake once with `nix flake check --no-build`, lints the pushed commit, and lists the checks whose outputs are not cached yet.
 - One `build` job per listed check runs on its own runner, so checks build in parallel. Cached checks get no job.
 
-Checks with the same `meta.hestia.group` share one runner, and `meta.hestia.os` overrides a check's runner labels. flake-ci's own light checks (`workflow-orphans`, `actionlint`, and `checks.treefmt`) use the group `"light"`; put your small checks in that group too.
+Checks with the same `meta.hestia.group` share one runner, and `meta.hestia.os` overrides a check's runner labels. flake-ci's own light checks (`workflow-orphans`, `actionlint`, `checks.treefmt`, and the `files:<path>` checks) use the group `"light"`; put your small checks in that group too.
 
 The matrix covers `.#checks.x86_64-linux` only: a Linux runner cannot build other systems' checks, and hestia's default runner map would send darwin checks to macOS runners. Uncached dependencies shared by several checks are built by each job that needs them. Hestia limits a matrix to 256 jobs. `nix-eval-jobs` comes from the runner's nixpkgs registry, not from flake-ci's pinned nixpkgs.
 
