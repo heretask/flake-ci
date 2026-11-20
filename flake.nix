@@ -1,5 +1,5 @@
 {
-  description = "flake-parts module: commit convention, signoff, releases, generated GitHub workflows, Nix formatting";
+  description = "flake-parts module: commit convention, signoff, releases, generated GitHub workflows, Nix formatting, vulnerability scanning";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -21,6 +21,7 @@
   outputs = inputs:
     inputs.flake-parts.lib.mkFlake {inherit inputs;} ({flake-parts-lib, ...}: let
       ciModule = flake-parts-lib.importApply ./modules {localInputs = inputs;};
+      vulnModule = flake-parts-lib.importApply ./modules/vuln {localInputs = inputs;};
     in {
       systems = [
         "x86_64-linux"
@@ -31,9 +32,13 @@
       imports = [
         ciModule
         (import ./tests {inherit ciModule inputs;})
+        (import ./tests/vuln.nix {inherit vulnModule inputs;})
       ];
 
-      flake.flakeModules.default = ciModule;
+      flake.flakeModules = {
+        default = ciModule;
+        vuln = vulnModule;
+      };
 
       # flake-ci's own repository.
       ci = {

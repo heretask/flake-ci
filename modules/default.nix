@@ -1,5 +1,5 @@
 # flake-ci: flake-parts module configured through `ci.*`.
-# localInputs: flake-ci's own inputs (files, treefmt-nix), bound by flake.nix.
+# localInputs: flake-ci's own inputs (files, treefmt-nix, nixpkgs-vuln), bound by flake.nix.
 {localInputs}: {
   imports = [
     "${localInputs.files}/flake-module.nix"
@@ -10,5 +10,6 @@
     ./nix-format.nix
     ./release
     ./signoff
+    (localInputs.flake-parts.lib.importApply ./vuln {inherit localInputs;})
   ];
 }
