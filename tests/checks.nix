@@ -172,6 +172,7 @@ in {
       # Cheap checks share the "light" runner group, so hestia runs them on one job.
       flake-ci-groups = assert config.checks.workflow-orphans.meta.hestia.group == "light";
       assert config.checks.actionlint.meta.hestia.group == "light";
+      assert lib.all (name: config.checks."files:${name}".meta.hestia.group == "light") (builtins.attrNames config.files.file);
         pkgs.runCommandLocal "flake-ci-groups" {} "touch $out";
     };
   };
