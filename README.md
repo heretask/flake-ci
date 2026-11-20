@@ -162,3 +162,5 @@ The scanners come from flake-ci's own `nixpkgs-vuln` input, not from the `nixpkg
 ## Development
 
 `nix flake check` runs the tool self-tests against a fixture consumer (`tests/`) plus this repository's own generated files and formatting.
+
+`nix run .#vuln-selftest` (Linux) checks the pinned scanners against the live grype database: sbomnix must label the kernel `o:linux:linux_kernel`, glibc `gnu:glibc` and curl `haxx:curl`, and grype must report NGINX2Shell (CVE-2026-123007) for nginx 1.30.4. It reads the build graph of a canary derivation, so it downloads only the grype database. The `vuln-selftest` workflow runs it weekly and on PRs that touch `flake.lock` or the scanner, and fails when `nixpkgs` or `nixpkgs-vuln` is locked to a revision older than 30 days.

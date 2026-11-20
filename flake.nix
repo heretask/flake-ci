@@ -33,6 +33,7 @@
         ciModule
         (import ./tests {inherit ciModule inputs;})
         (import ./tests/vuln.nix {inherit vulnModule inputs;})
+        (import ./tests/vuln-selftest.nix {inherit inputs;})
       ];
 
       flake.flakeModules = {
