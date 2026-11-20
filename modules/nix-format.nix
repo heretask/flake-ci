@@ -38,7 +38,7 @@ in {
         flakeCheck = false;
       };
 
-      checks.treefmt = config.treefmt.build.check (lib.cleanSourceWith {
+      checks.treefmt = (config.treefmt.build.check (lib.cleanSourceWith {
         name = "nix-format-source";
         src = self;
         filter = path: type: let
@@ -52,7 +52,7 @@ in {
               || (type == "directory" && lib.hasPrefix "${relative}/" wanted)
           )
           cfg.paths;
-      });
+      })).overrideAttrs (old: {meta = (old.meta or {}) // {hestia.group = "light";};});
     };
   };
 }
