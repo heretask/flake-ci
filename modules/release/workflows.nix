@@ -1,4 +1,5 @@
-# Release presets: prepare/tag/publish on dispatch, and notify on channel pushes.
+# Release presets: one dispatch prepares main, waits for its Nix run, tags and publishes;
+# channel pushes notify the receiving repository.
 {
   cfg,
   github,
@@ -20,6 +21,12 @@
       // permissions;
   };
 
+  notifyToken = appToken {
+    inherit owner;
+    repositories = lib.removePrefix "${owner}/" cfg.notify.repository;
+    permission-contents = "write";
+  };
+
   checkoutAt = name: ref:
     steps.checkout
     // {
@@ -34,12 +41,19 @@ in
   {
     release = {
       name = "Release";
-      on.workflow_dispatch.inputs.channel = {
-        description = "Release channel";
-        type = "choice";
-        required = true;
-        default = "rc";
-        options = ["rc" "stable"];
+      on.workflow_dispatch.inputs = {
+        channel = {
+          description = "Release channel";
+          type = "choice";
+          required = true;
+          default = "rc";
+          options = ["rc" "stable"];
+        };
+        skip_ci = {
+          description = "Urgent: release without waiting for the Nix run on the commit";
+          type = "boolean";
+          default = false;
+        };
       };
       permissions.contents = "read";
       concurrency = {
@@ -50,70 +64,87 @@ in
         name = "prepare";
         runs-on = github.runner;
         timeout-minutes = 15;
-        outputs = {
-          ready = "\${{ steps.result.outputs.ready }}";
-          sha = "\${{ steps.result.outputs.sha }}";
-        };
+        outputs.sha = "\${{ steps.result.outputs.sha }}";
         steps = [
-          (appToken {
-            permission-contents = "write";
-            permission-pull-requests = "write";
-          })
+          (appToken {permission-contents = "write";})
           (checkoutAt "Checkout main" "main")
           steps.installNix
           {
-            name = "Prepare release files";
-            "if" = "inputs.channel == 'rc'";
-            run = "${nixRun} .#release -- prepare";
-          }
-          {
-            name = "Check preparation result";
+            name = "Prepare release files and push them to main";
             id = "result";
-            env.CHANNEL = "\${{ inputs.channel }}";
+            env.GH_TOKEN = "\${{ steps.app-token.outputs.token }}";
             run = ''
               set -euo pipefail
 
-              sha="$(git rev-parse HEAD)"
-              echo "sha=$sha" >> "$GITHUB_OUTPUT"
+              remote="https://x-access-token:''${GH_TOKEN}@github.com/''${GITHUB_REPOSITORY}.git"
 
-              if [[ "$CHANNEL" == stable ]]; then
-                echo "ready=true" >> "$GITHUB_OUTPUT"
-                exit 0
-              fi
+              # A push that loses a race with another merge is retried once on the new main.
+              for attempt in 1 2; do
+                ${nixRun} .#release -- prepare
+                changed="$(git status --porcelain)"
+                if [[ -z "$changed" ]]; then
+                  break
+                fi
+                if grep -qvE '^.. (VERSION|CHANGELOG\.md)$' <<< "$changed"; then
+                  printf 'prepare changed files other than VERSION and CHANGELOG.md:\n%s\n' "$changed" >&2
+                  exit 1
+                fi
+                git add VERSION CHANGELOG.md
+                git -c user.name='github-actions[bot]' \
+                  -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+                  commit --quiet -m "chore: prepare v$(tr -d '[:space:]' < VERSION)"
+                if git push "$remote" HEAD:refs/heads/main; then
+                  break
+                fi
+                if [[ "$attempt" == 2 ]]; then
+                  echo 'main moved twice while preparing; run Release again' >&2
+                  exit 1
+                fi
+                git fetch "$remote" main
+                git reset --quiet --hard FETCH_HEAD
+              done
 
-              if git diff --quiet -- VERSION CHANGELOG.md; then
-                echo "ready=true" >> "$GITHUB_OUTPUT"
-              else
-                echo "ready=false" >> "$GITHUB_OUTPUT"
-                echo "title=chore: prepare v$(tr -d '[:space:]' < VERSION)" >> "$GITHUB_OUTPUT"
-              fi
+              echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
             '';
           }
+        ];
+      };
+      # A null name omits the job.
+      jobs.${
+        if cfg.notify != null && cfg.notify.prebuildEventType != null
+        then "prebuild"
+        else null
+      } = {
+        name = "prebuild";
+        needs = ["prepare"];
+        runs-on = github.runner;
+        timeout-minutes = 5;
+        steps = [
+          notifyToken
           {
-            name = "Create or update preparation PR";
-            "if" = "steps.result.outputs.ready == 'false'";
-            uses = steps.createPullRequest;
-            "with" = {
-              token = "\${{ steps.app-token.outputs.token }}";
-              branch = "automation/prepare-release";
-              base = "main";
-              add-paths = ''
-                VERSION
-                CHANGELOG.md
-              '';
-              commit-message = "\${{ steps.result.outputs.title }}";
-              title = "\${{ steps.result.outputs.title }}";
-              body = "Merge this PR, wait for Nix to pass, then rerun Release with the rc channel.";
+            # The receiver builds the commit while its Nix run is still going, so the
+            # deployment after the channel moves finds the result in its cache.
+            name = "Ask ${cfg.notify.repository} to build the commit";
+            env = {
+              CHANNEL = "\${{ inputs.channel == 'stable' && '${cfg.branches.stable}' || '${cfg.branches.rc}' }}";
+              SHA = "\${{ needs.prepare.outputs.sha }}";
+              GH_TOKEN = "\${{ steps.app-token.outputs.token }}";
             };
+            run = ''
+              gh api --method POST "/repos/${cfg.notify.repository}/dispatches" \
+                -f event_type=${cfg.notify.prebuildEventType} \
+                -f "client_payload[channel]=$CHANNEL" \
+                -f "client_payload[sha]=$SHA"
+            '';
           }
         ];
       };
       jobs.release = {
         name = "release";
         needs = ["prepare"];
-        "if" = "needs.prepare.outputs.ready == 'true'";
         runs-on = github.runner;
-        timeout-minutes = 20;
+        # Covers the wait for the Nix run.
+        timeout-minutes = 90;
         steps = [
           (appToken {
             permission-actions = "read";
@@ -122,7 +153,43 @@ in
           (checkoutAt "Checkout exact SHA" "\${{ needs.prepare.outputs.sha }}")
           steps.installNix
           {
-            name = "Verify Nix success, main reachability, and perform";
+            name = "Wait for the Nix run on the commit";
+            "if" = "inputs.skip_ci == false";
+            env = {
+              GH_TOKEN = "\${{ steps.app-token.outputs.token }}";
+              SHA = "\${{ needs.prepare.outputs.sha }}";
+            };
+            run = ''
+              set -euo pipefail
+
+              missing=0
+              while :; do
+                state="$(gh api --method GET \
+                  "/repos/''${GITHUB_REPOSITORY}/actions/workflows/nix-check.yaml/runs" \
+                  -f head_sha="$SHA" \
+                  -f branch=main \
+                  -f per_page=1 \
+                  --jq '.workflow_runs[0] | if . then "\(.status) \(.conclusion)" else "missing" end')"
+                case "$state" in
+                  "completed success") break ;;
+                  completed*)
+                    printf 'Nix workflow for %s ended as: %s\n' "$SHA" "$state" >&2
+                    exit 1
+                    ;;
+                  missing)
+                    missing=$((missing + 1))
+                    if ((missing > 15)); then
+                      printf 'no Nix workflow run for %s on main\n' "$SHA" >&2
+                      exit 1
+                    fi
+                    ;;
+                esac
+                sleep 20
+              done
+            '';
+          }
+          {
+            name = "Verify main reachability and perform";
             id = "perform";
             env = {
               CHANNEL = "\${{ inputs.channel }}";
@@ -146,18 +213,6 @@ in
               git fetch origin main
               if ! git merge-base --is-ancestor "$SHA" origin/main; then
                 printf '%s is not reachable from origin/main\n' "$SHA" >&2
-                exit 1
-              fi
-
-              run="$(gh api --method GET \
-                "/repos/''${GITHUB_REPOSITORY}/actions/workflows/nix-check.yaml/runs" \
-                -f head_sha="$SHA" \
-                -f branch=main \
-                -f status=success \
-                -f per_page=1 \
-                --jq '.workflow_runs[0].id // empty')"
-              if [[ -z "$run" ]]; then
-                printf 'no successful Nix workflow for %s on main\n' "$SHA" >&2
                 exit 1
               fi
 
@@ -202,11 +257,7 @@ in
         runs-on = github.runner;
         timeout-minutes = 5;
         steps = [
-          (appToken {
-            inherit owner;
-            repositories = lib.removePrefix "${owner}/" cfg.notify.repository;
-            permission-contents = "write";
-          })
+          notifyToken
           {
             name = "Notify ${cfg.notify.repository} of channel update";
             env = {

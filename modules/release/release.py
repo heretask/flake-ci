@@ -569,14 +569,11 @@ def cmd_rc(root: Path, config: Config) -> int:
 def cmd_stable(root: Path, config: Config) -> int:
     if is_dirty(root):
         raise ReleaseError("working tree is dirty")
-    tags = list_tags(root)
-    version = read_version(root, config)
-    head = head_sha(root)
-    if not matching_rc(root, tags, version, head):
-        raise ReleaseError(f"HEAD is not a release candidate for {version}; stable only promotes an RC commit")
-    tag = f"v{version}"
-    if tag in tags:
-        if peel_tag(root, tag) != head:
+    status = collect_status(root, config)
+    require_ready(status)
+    tag = f"v{status.version_target}"
+    if tag in list_tags(root):
+        if peel_tag(root, tag) != status.head:
             raise ReleaseError(f"{tag} already exists on a different commit")
     else:
         create_tag(root, tag)

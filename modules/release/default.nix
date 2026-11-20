@@ -54,6 +54,12 @@ in {
             default = "release";
             description = "repository_dispatch event type.";
           };
+          prebuildEventType = mkOption {
+            type = types.nullOr types.str;
+            default = null;
+            example = "prebuild";
+            description = "repository_dispatch event type sent as soon as a release is requested, with the channel branch and the commit about to be released, so the receiver can build it before the channel moves. `null` sends none.";
+          };
         };
       });
     };

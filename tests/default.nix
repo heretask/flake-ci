@@ -25,7 +25,10 @@
             clientIdVariable = "RELEASE_APP_CLIENT_ID";
             privateKeySecret = "RELEASE_APP_PRIVATE_KEY";
           };
-          notify.repository = "example/ops";
+          notify = {
+            repository = "example/ops";
+            prebuildEventType = "prebuild";
+          };
         };
         ci.commits.scopes = {
           changelog = ["api" "app"];
