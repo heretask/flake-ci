@@ -153,25 +153,29 @@ class ReleaseLifecycleTest(unittest.TestCase):
         self.assertEqual(status.next_rc, "v1.1.0-rc.1")
         self.assertIsNone(status.matching_rc)
 
-    def test_stable_requires_rc_at_head(self):
+    def test_stable_needs_no_rc(self):
         tag(self.repo, "v1.0.0")
         commit_file(self.repo, "fix: one")
         prepare_and_commit(self.repo, "chore: prepare 1.0.1")
-        before = self.snapshot_release_files()
-        self.assertEqual(main(["stable"]), 1)
-        self.assertEqual(self.snapshot_release_files(), before)
-        self.assertEqual(run(["git", "tag", "--list", "v1.0.1"], cwd=self.repo).stdout, "")
+        self.assertEqual(main(["stable"]), 0)
+        self.assertEqual(
+            run(["git", "rev-parse", "v1.0.1^{commit}"], cwd=self.repo).stdout.strip(), head(self.repo)
+        )
 
-    def test_stable_rejects_chore_after_rc(self):
+    def test_stable_releases_prepared_changes_after_rc(self):
         tag(self.repo, "v1.0.0")
         commit_file(self.repo, "fix: one")
         prepare_and_commit(self.repo, "chore: prepare 1.0.1")
         tag(self.repo, "v1.0.1-rc.1")
-        commit_file(self.repo, "chore: later")
+        commit_file(self.repo, "fix: two")
         before = self.snapshot_release_files()
         self.assertEqual(main(["stable"]), 1)
         self.assertEqual(self.snapshot_release_files(), before)
-        self.assertEqual(run(["git", "tag", "--list", "v1.0.1"], cwd=self.repo).stdout, "")
+        prepare_and_commit(self.repo, "chore: prepare 1.0.1 again")
+        self.assertEqual(main(["stable"]), 0)
+        self.assertEqual(
+            run(["git", "rev-parse", "v1.0.1^{commit}"], cwd=self.repo).stdout.strip(), head(self.repo)
+        )
 
     def test_promotion_reuses_rc_commit(self):
         tag(self.repo, "v1.0.0")

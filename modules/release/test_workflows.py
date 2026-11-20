@@ -14,7 +14,9 @@ RELEASE = WORKFLOWS[".github/workflows/release.yaml"]
 NOTIFY = WORKFLOWS[".github/workflows/release-notify.yaml"]
 STEPS = RELEASE["jobs"]["release"]["steps"]
 PREPARATION = RELEASE["jobs"]["prepare"]
-RESULT, CREATE_PR = PREPARATION["steps"][-2:]
+PREPARE = PREPARATION["steps"][-1]
+PREBUILD = RELEASE["jobs"]["prebuild"]
+WAIT = next(step for step in STEPS if step["name"] == "Wait for the Nix run on the commit")
 PERFORM = next(step for step in STEPS if step.get("id") == "perform")
 PUBLISH = STEPS[-1]
 DISPATCH = NOTIFY["jobs"]["notify"]["steps"][-1]
@@ -22,16 +24,23 @@ SHA = "1" * 40
 
 STUB = """import json, os, pathlib, sys
 command = [pathlib.Path(sys.argv[0]).name, *sys.argv[1:]]
+def sequence(name):
+    # The nth call takes the nth '|'-separated value; later calls repeat the last one.
+    values = os.environ[name].split('|')
+    counter = pathlib.Path(os.environ['COMMAND_LOG']).with_name('count-' + name)
+    seen = int(counter.read_text()) if counter.exists() else 0
+    counter.write_text(str(seen + 1))
+    return values[min(seen, len(values) - 1)]
 with open(os.environ['COMMAND_LOG'], 'a') as log:
     log.write(json.dumps(command) + '\\n')
 if command[:2] == ['git', 'merge-base']:
     sys.exit(0 if os.environ['MAIN_REACHABLE'] == '1' else 1)
-if command[:2] == ['git', 'diff']:
-    sys.exit(0 if os.environ['PREPARED'] == '1' else 1)
+if command[:2] == ['git', 'status']:
+    print(os.environ['CHANGED'], end='')
 if command[:2] == ['git', 'rev-parse']:
     print(os.environ['SHA'])
 if command[:2] == ['git', 'push']:
-    sys.exit(int(os.environ['PUSH_EXIT']))
+    sys.exit(int(sequence('PUSH_EXIT')))
 if command[:3] == ['gh', 'release', 'create']:
     notes = pathlib.Path(command[command.index('--notes-file') + 1])
     assert notes.parent == pathlib.Path(os.environ['RUNNER_TEMP'])
@@ -41,7 +50,7 @@ if command[:3] == ['gh', 'release', 'view']:
     print(os.environ['IS_DRAFT'])
     sys.exit(int(os.environ['VIEW_EXIT']))
 if command[0] == 'gh':
-    print(os.environ['CI_RUN'])
+    print(sequence('CI_RUN'))
 if command[0] == 'nix':
     if command[-2] == 'notes':
         print(os.environ['RELEASE_NOTES'], end='')
@@ -58,7 +67,7 @@ class ReleaseWorkflowsTest(unittest.TestCase):
             runner_temp = Path(directory) / "runner temp"
             runner_temp.mkdir()
             (root / "VERSION").write_text("1.2.3\n")
-            for command in ("git", "gh", "nix"):
+            for command in ("git", "gh", "nix", "sleep"):
                 path = root / command
                 path.write_text(f"#!{sys.executable}\n{STUB}")
                 path.chmod(0o755)
@@ -68,9 +77,9 @@ class ReleaseWorkflowsTest(unittest.TestCase):
             env = os.environ | {
                 "PATH": f"{root}{os.pathsep}{os.environ['PATH']}",
                 "COMMAND_LOG": str(log), "GITHUB_OUTPUT": str(output),
-                "PREPARED": "1", "GITHUB_REPOSITORY": "example/app",
+                "CHANGED": "", "GITHUB_REPOSITORY": "example/app",
                 "GITHUB_SHA": "2" * 40, "SHA": SHA, "CHANNEL": "rc",
-                "GH_TOKEN": "test-token", "MAIN_REACHABLE": "1", "CI_RUN": "123",
+                "GH_TOKEN": "test-token", "MAIN_REACHABLE": "1", "CI_RUN": "completed success",
                 "RELEASE_TAG": "v1.2.3-rc.1",
                 "TAG": "v1.2.3-rc.1", "GH_REPO": "example/app",
                 "RUNNER_TEMP": str(runner_temp), "RELEASE_NOTES": "## 1.2.3\n\n- change\n",
@@ -82,45 +91,93 @@ class ReleaseWorkflowsTest(unittest.TestCase):
             )
             return result, output.read_text(), [json.loads(line) for line in log.read_text().splitlines()]
 
-    def test_preparation_selects_sha_and_requests_pr_only_for_changes(self):
-        for prepared in ("1", "0"):
-            with self.subTest(prepared=prepared):
-                result, output, _ = self.run_step(RESULT, PREPARED=prepared)
-                self.assertEqual(result.returncode, 0, result.stderr)
-                expected = f"sha={SHA}\nready=true\n" if prepared == "1" else (
-                    f"sha={SHA}\nready=false\ntitle=chore: prepare v1.2.3\n"
-                )
-                self.assertEqual(output, expected)
-        self.assertEqual(CREATE_PR["if"], "steps.result.outputs.ready == 'false'")
-        self.assertRegex(CREATE_PR["uses"], r"^peter-evans/create-pull-request@[0-9a-f]{40}$")
-        options = CREATE_PR["with"]
-        self.assertEqual(options["token"], "${{ steps.app-token.outputs.token }}")
-        self.assertEqual((options["base"], options["branch"]), ("main", "automation/prepare-release"))
-        self.assertEqual(options["add-paths"].splitlines(), ["VERSION", "CHANGELOG.md"])
-        self.assertEqual(options["title"], "${{ steps.result.outputs.title }}")
-        self.assertEqual(options["commit-message"], options["title"])
-        self.assertIn("rerun Release", options["body"])
+    REMOTE = "https://x-access-token:test-token@github.com/example/app.git"
+    RELEASE_FILES = " M CHANGELOG.md\n M VERSION\n"
 
-    def test_stable_selects_main_head_without_preparing(self):
-        result, output, commands = self.run_step(RESULT, CHANNEL="stable", PREPARED="0")
+    def test_prepared_main_is_selected_without_a_commit(self):
+        result, output, commands = self.run_step(PREPARE)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(output, f"sha={SHA}\nready=true\n")
-        self.assertEqual(commands, [["git", "rev-parse", "HEAD"]])
-        prepare = next(step for step in PREPARATION["steps"] if step.get("name") == "Prepare release files")
-        self.assertEqual(prepare["if"], "inputs.channel == 'rc'")
-        self.assertEqual(RESULT["env"]["CHANNEL"], "${{ inputs.channel }}")
+        self.assertEqual(output, f"sha={SHA}\n")
+        self.assertEqual(commands[0][-3:], [".#release", "--", "prepare"])
+        self.assertFalse(any(command[:2] in (["git", "commit"], ["git", "push"]) for command in commands))
+
+    def test_preparation_is_committed_and_pushed_to_main_for_both_channels(self):
+        result, output, commands = self.run_step(PREPARE, CHANGED=self.RELEASE_FILES)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(output, f"sha={SHA}\n")
+        self.assertIn(["git", "add", "VERSION", "CHANGELOG.md"], commands)
+        commit = next(command for command in commands if "commit" in command)
+        self.assertEqual(commit[-2:], ["-m", "chore: prepare v1.2.3"])
+        pushes = [command for command in commands if command[:2] == ["git", "push"]]
+        self.assertEqual(pushes, [["git", "push", self.REMOTE, "HEAD:refs/heads/main"]])
+        self.assertNotIn("if", PREPARE)
+        self.assertFalse(any("pull-request" in step.get("uses", "") for step in PREPARATION["steps"]))
+
+    def test_preparation_refuses_to_push_other_files(self):
+        result, output, commands = self.run_step(PREPARE, CHANGED=self.RELEASE_FILES + "?? other.txt\n")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(output, "")
+        self.assertFalse(any(command[:2] in (["git", "add"], ["git", "push"]) for command in commands))
+
+    def test_preparation_retries_once_when_main_moved(self):
+        result, output, commands = self.run_step(PREPARE, CHANGED=self.RELEASE_FILES, PUSH_EXIT="1|0")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(output, f"sha={SHA}\n")
+        self.assertEqual(sum(command[0] == "nix" for command in commands), 2)
+        self.assertIn(["git", "fetch", self.REMOTE, "main"], commands)
+        self.assertIn(["git", "reset", "--quiet", "--hard", "FETCH_HEAD"], commands)
+        self.assertFalse(any("--force" in arg for command in commands for arg in command))
+
+        result, output, commands = self.run_step(PREPARE, CHANGED=self.RELEASE_FILES, PUSH_EXIT="1")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(output, "")
+        self.assertEqual(sum(command[:2] == ["git", "push"] for command in commands), 2)
+
+    def test_wait_passes_only_when_the_nix_run_succeeds(self):
+        result, _, commands = self.run_step(WAIT, CI_RUN="missing|queued null|in_progress null|completed success")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        queries = [command for command in commands if command[0] == "gh"]
+        self.assertEqual(len(queries), 4)
+        self.assertTrue({f"head_sha={SHA}", "branch=main"}.issubset(queries[0]))
+        self.assertNotIn("status=success", queries[0])
+        self.assertEqual(sum(command[0] == "sleep" for command in commands), 3)
+
+        for state in ("completed failure", "completed cancelled", "missing"):
+            with self.subTest(state=state):
+                result, _, _ = self.run_step(WAIT, CI_RUN=state)
+                self.assertNotEqual(result.returncode, 0)
+
+    def test_skip_ci_skips_only_the_wait(self):
+        self.assertEqual(WAIT["if"], "inputs.skip_ci == false")
+        self.assertEqual([step["name"] for step in STEPS if "if" in step], [WAIT["name"]])
+        self.assertLess(STEPS.index(WAIT), STEPS.index(PERFORM))
+        skip = RELEASE["on"]["workflow_dispatch"]["inputs"]["skip_ci"]
+        self.assertEqual((skip["type"], skip["default"]), ("boolean", False))
+
+    def test_prebuild_is_requested_for_the_prepared_commit_before_the_wait(self):
+        dispatch = PREBUILD["steps"][-1]
+        result, _, commands = self.run_step(dispatch, CHANNEL="unstable")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(commands, [[
+            "gh", "api", "--method", "POST", "/repos/example/ops/dispatches",
+            "-f", "event_type=prebuild", "-f", "client_payload[channel]=unstable",
+            "-f", f"client_payload[sha]={SHA}",
+        ]])
+        self.assertEqual(PREBUILD["needs"], ["prepare"])
+        self.assertEqual(dispatch["env"]["SHA"], "${{ needs.prepare.outputs.sha }}")
+        self.assertEqual(
+            dispatch["env"]["CHANNEL"], "${{ inputs.channel == 'stable' && 'stable' || 'unstable' }}"
+        )
 
     def test_invalid_channel_is_rejected_before_publication(self):
         result, _, commands = self.run_step(PERFORM, CHANNEL="other")
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(commands, [])
 
-    def test_publish_requires_main_and_successful_ci(self):
-        for env in ({"MAIN_REACHABLE": "0"}, {"CI_RUN": ""}):
-            with self.subTest(env=env):
-                result, _, commands = self.run_step(PERFORM, **env)
-                self.assertNotEqual(result.returncode, 0)
-                self.assertFalse(any(command[:2] == ["git", "push"] for command in commands))
+    def test_publish_requires_main(self):
+        result, _, commands = self.run_step(PERFORM, MAIN_REACHABLE="0")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(any(command[:2] == ["git", "push"] for command in commands))
 
     def test_publish_updates_tag_and_channel_atomically_at_selected_sha(self):
         for channel, branch in (("rc", "unstable"), ("stable", "stable")):
@@ -130,8 +187,7 @@ class ReleaseWorkflowsTest(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(output, f"tag={tag}\n")
                 self.assertIn(["git", "merge-base", "--is-ancestor", SHA, "origin/main"], commands)
-                query = next(command for command in commands if command[0] == "gh")
-                self.assertTrue({f"head_sha={SHA}", "branch=main", "status=success"}.issubset(query))
+                self.assertFalse(any(command[0] == "gh" for command in commands))
                 self.assertEqual(next(command for command in commands if command[0] == "nix")[-2:], ["--", channel])
                 pushes = [command for command in commands if command[:2] == ["git", "push"]]
                 self.assertEqual(len(pushes), 1)
@@ -200,10 +256,8 @@ class ReleaseWorkflowsTest(unittest.TestCase):
         self.assertEqual((channel["type"], channel["options"], channel["default"]), ("choice", ["rc", "stable"], "rc"))
         self.assertEqual(RELEASE["concurrency"], {"group": "release-request", "cancel-in-progress": False})
         self.assertEqual(RELEASE["jobs"]["release"]["needs"], ["prepare"])
-        self.assertEqual(RELEASE["jobs"]["release"]["if"], "needs.prepare.outputs.ready == 'true'")
-        self.assertEqual(PREPARATION["outputs"], {
-            "ready": "${{ steps.result.outputs.ready }}", "sha": "${{ steps.result.outputs.sha }}"
-        })
+        self.assertNotIn("if", RELEASE["jobs"]["release"])
+        self.assertEqual(PREPARATION["outputs"], {"sha": "${{ steps.result.outputs.sha }}"})
         checkout = next(step for step in STEPS if step.get("uses", "").startswith("actions/checkout@"))
         self.assertEqual(checkout["with"]["ref"], "${{ needs.prepare.outputs.sha }}")
         self.assertEqual(PERFORM["env"]["SHA"], "${{ needs.prepare.outputs.sha }}")

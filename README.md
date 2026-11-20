@@ -5,7 +5,7 @@ A [flake-parts](https://flake.parts) module for repository automation, configure
 - **Commit convention**: one list of Conventional Commit types and scopes drives commitlint (`nix run .#commitlint`), the PR-title check, and `cog.toml`. commitlint and the PR-title check share one script, so both name the exact problem: an unknown type or scope, a tooling scope on a changelog type (with the `chore(scope): …` to use instead), a missing `: `, or the characters over the limit.
 - **Signoff**: `nix run .#signoff` runs `nix flake check`, then marks the tested commit with [gh-signoff](https://github.com/basecamp/gh-signoff). Works from Git and Jujutsu. With `ci.signoff.skipChecks` set, it runs `nix flake check --no-build`, builds every other check of the current system in one `nix build`, and names the skipped checks.
 - **Releases**: `nix run .#release` prepares `VERSION`/`CHANGELOG.md` with [cocogitto](https://github.com/cocogitto/cocogitto), tags rc and stable releases, and advances channel branches from a dispatched workflow. Changelog sections follow the [Ash](https://github.com/ash-project/ash/blob/main/CHANGELOG.md) style: a compare link and the date of the newest entry in the heading, breaking changes first, then one section per commit type in `cog.toml` order, each entry crediting its author (`@handle` for GitHub noreply emails) and linking the `(#N)` pull request.
-  `release stable` only promotes an RC for `VERSION` at HEAD. Stable workflow runs skip preparation and never open a preparation PR.
+  One `Release` run prepares `main` (the release App pushes the `VERSION`/`CHANGELOG.md` commit itself, so it must be allowed to bypass the rules on `main`), waits for the flake check on that commit unless `skip_ci` is set, then tags and moves the channel. `release stable` needs no RC: it tags any prepared commit, whether or not an RC points at it.
 - **GitHub workflows**: PR-title lint, flake check on `main`, optional macOS check, scheduled flake-input update PRs, and release workflows, rendered into `.github/workflows`.
 - **Nix formatting**: alejandra, statix, and deadnix through [treefmt-nix](https://github.com/numtide/treefmt-nix).
 
@@ -78,6 +78,7 @@ Then run `nix run .#write-files` and commit the generated files.
 | `ci.release.branches.{rc,stable}` | `"unstable"`, `"stable"` | Channel branches. |
 | `ci.release.appToken.{clientIdVariable,privateKeySecret}` | — | GitHub App credentials the release workflows use. |
 | `ci.release.notify.{repository,eventType}` | `null` | `repository_dispatch` to another repository when a channel branch moves. |
+| `ci.release.notify.prebuildEventType` | `null` | Second `repository_dispatch`, sent when a release is requested, so the receiver can build the commit before the channel moves. |
 | `ci.nixFormat.{enable,paths,excludes}` | off | treefmt Nix formatters and `checks.treefmt` over `paths`. |
 
 Every workflow runs Nix with `--option accept-flake-config false`.
