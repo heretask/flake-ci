@@ -26,7 +26,12 @@ if ((${#lockfiles[@]})); then
 fi
 [[ $quick == --quick ]] && exit "$rc"
 
-grype_gate() { grype "$1" --config "$2" --fail-on high --only-fixed || rc=1; }
+# Findings without an upstream fix are listed, most at risk first, and never fail the scan.
+grype_scan() {
+  grype "$1" --config "$2" --fail-on high --only-fixed || rc=1
+  echo "vuln: not fixed upstream (report only)" >&2
+  grype "$1" --config "$2" --only-notfixed || rc=1
+}
 
 mapfile -t closures < <(jq -r '.closures[]' <<<"$manifest")
 for i in "${!closures[@]}"; do
@@ -35,16 +40,16 @@ for i in "${!closures[@]}"; do
   sbom=$work/closure-$i.cdx.json
   sbomnix "$out" --cdx "$sbom" --csv /dev/null --spdx /dev/null >&2
   render '{ignore: (.[0] + (.[1] | patched_rules))}' -s "$work/accepts.json" "$sbom" >"$work/closure-$i.yaml"
-  grype_gate "sbom:$sbom" "$work/closure-$i.yaml"
+  grype_scan "sbom:$sbom" "$work/closure-$i.yaml"
   echo "vuln: closure $out (Alpine secdb)" >&2
   render alpine "$sbom" >"$work/closure-$i.alpine.cdx.json"
-  grype_gate "sbom:$work/closure-$i.alpine.cdx.json" "$work/closure-$i.yaml"
+  grype_scan "sbom:$work/closure-$i.alpine.cdx.json" "$work/closure-$i.yaml"
 done
 
 mapfile -t dirs < <(jq -r '.dirs[]' <<<"$manifest")
 for d in "${dirs[@]}"; do
   out=$(realise "$d")
   echo "vuln: dir $out" >&2
-  grype_gate "dir:$out" "$work/grype.yaml"
+  grype_scan "dir:$out" "$work/grype.yaml"
 done
 exit "$rc"

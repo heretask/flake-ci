@@ -144,7 +144,7 @@ perSystem = {config, ...}: {
 | `closures`, Alpine pass | the same SBOM with each versioned package relabelled `pkg:apk/alpine/<name>@<version>-r0`, then `grype sbom:` | a fixed high or critical finding |
 | `dirs` | `grype dir:` | a fixed high or critical finding |
 
-The Alpine pass matches packages against Alpine's security database, which often lists a fix before NVD gives it a CPE. A CVE that a nixpkgs patch resolves (sbomnix records it in `pedigree`) is ignored for that package name and version only. An accept stops applying after its `until` date, so the finding fails the scan again. osv-scanner ignores by ID only, so `package` does not narrow an accept in the lockfile lane.
+Each grype lane then lists the findings that have no upstream fix, most at risk first. They never fail the scan; accept one or patch the package yourself. The Alpine pass matches packages against Alpine's security database, which often lists a fix before NVD gives it a CPE. A CVE that a nixpkgs patch resolves (sbomnix records it in `pedigree`) is ignored for that package name and version only. An accept stops applying after its `until` date, so the finding fails the scan again. osv-scanner ignores by ID only, so `package` does not narrow an accept in the lockfile lane.
 
 Each target is also published as plain data at `vuln.<system>.<name>`, derivations as `"<drv>^<output>"` strings. Another flake adds to it with `lib.mkMerge`, keeping both repositories' accepts:
 
