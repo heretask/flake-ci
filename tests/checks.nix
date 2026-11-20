@@ -1,6 +1,15 @@
 # Tool self-tests, evaluated against the fixture consumer in ./default.nix.
-{config, ...}: let
+{
+  config,
+  lib,
+  ...
+}: let
   inherit (config.ci) commits github;
+  # The non-matrix workflows, for the checks that cover the flake-check job.
+  plain = import ../modules/github/workflows.nix {
+    cfg = github // {flakeCheck = github.flakeCheck // {matrix = false;};};
+    inherit commits lib;
+  };
 in {
   perSystem = {
     config,
@@ -95,7 +104,7 @@ in {
       # flakeCheck.* settings change only the flake-check job; other Linux jobs keep runner.
       flake-check-job = let
         job = stem: name: github.workflows.${stem}.jobs.${name};
-        flakeCheck = job "nix-check" "flake-check";
+        flakeCheck = plain.nix-check.jobs.flake-check;
         stepNames = map (step: step.name or null) flakeCheck.steps;
       in
         assert flakeCheck.runs-on == github.flakeCheck.runner;
@@ -107,7 +116,7 @@ in {
         assert builtins.elem "Reclaim hosted runner disk in the background" stepNames;
         assert !(builtins.elem "Reclaim hosted runner disk" stepNames);
         assert github.flakeCheck.queue;
-        assert github.workflows.nix-check.concurrency
+        assert plain.nix-check.concurrency
         == {
           group = "\${{ github.workflow }}-\${{ github.ref }}";
           cancel-in-progress = false;
@@ -117,7 +126,7 @@ in {
 
       # cache = "hestia" swaps the flake-check cache step and adds what hestia needs.
       hestia-cache = let
-        flakeCheck = github.workflows.nix-check.jobs.flake-check;
+        flakeCheck = plain.nix-check.jobs.flake-check;
         uses = prefix: builtins.any (step: lib.hasPrefix prefix (step.uses or "")) flakeCheck.steps;
         checkStep = lib.findFirst (step: (step.name or null) == "Check flake") {} flakeCheck.steps;
       in
@@ -129,6 +138,29 @@ in {
         assert github.workflows ? hestia-gc;
         assert (github.workflows.hestia-gc.jobs.gc.permissions.actions or null) == "write";
           pkgs.runCommandLocal "hestia-cache" {} "touch $out";
+
+      # flakeCheck.matrix replaces flake-check with an eval job and one build job per check.
+      matrix-job = let
+        nixCheck = github.workflows.nix-check;
+        evalJob = nixCheck.jobs.eval;
+        buildJob = nixCheck.jobs.build;
+        stepWith = prefix: job: lib.findFirst (step: lib.hasPrefix prefix (step.uses or "")) {} job.steps;
+      in
+        assert github.flakeCheck.matrix;
+        assert !(nixCheck.jobs ? flake-check);
+        assert (stepWith "Mic92/hestia/matrix@" evalJob) != {};
+        assert evalJob.outputs ? manifest-version;
+        assert buildJob.needs == "eval";
+        assert buildJob.strategy.matrix == "\${{ fromJSON(needs.eval.outputs.matrix) }}";
+        assert buildJob.runs-on == "\${{ matrix.os }}";
+        assert (stepWith "Mic92/hestia@" buildJob)."with".wait-manifest-version == "\${{ needs.eval.outputs.manifest-version }}";
+        assert buildJob.permissions.actions == "read";
+          pkgs.runCommandLocal "matrix-job" {} "touch $out";
+
+      # Cheap checks share the "light" runner group, so hestia runs them on one job.
+      flake-ci-groups = assert config.checks.workflow-orphans.meta.hestia.group == "light";
+      assert config.checks.actionlint.meta.hestia.group == "light";
+        pkgs.runCommandLocal "flake-ci-groups" {} "touch $out";
     };
   };
 }

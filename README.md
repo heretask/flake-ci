@@ -67,6 +67,7 @@ Then run `nix run .#write-files` and commit the generated files.
 | `ci.github.flakeCheck.timeoutMinutes` | `30` | Timeout in minutes for the flake-check job. |
 | `ci.github.flakeCheck.reclaimDisk` | `"foreground"` | `"background"` frees preinstalled toolchains from the runner disk without blocking the flake-check job. See [Runner disk](#runner-disk). |
 | `ci.github.flakeCheck.queue` | `false` | `true` runs main's flake checks one at a time in push order. See [Queued checks](#queued-checks). |
+| `ci.github.flakeCheck.matrix` | `false` | `true` replaces the flake-check job with an eval job and one build job per uncached check. Needs `ci.github.cache = "hestia"`. See [Build matrix](#build-matrix). |
 | `ci.github.cache` | `"magic-nix-cache"` | Nix binary cache for flake-check jobs: `"magic-nix-cache"` or `"hestia"`. |
 | `ci.github.darwinCheck` | `false` | Manually dispatched flake check on macOS. |
 | `ci.github.extraNixConfig` | `""` | Extra `nix.conf` lines for the Nix installer, e.g. binary caches. |
@@ -94,6 +95,17 @@ GitHub's `ubuntu-24.04` runner starts with about 14 GB free. The flake-check job
 ## Queued checks
 
 By default each push to `main` gets its own flake-check run, and runs overlap. A run uploads its builds to the cache only when it finishes, so a run that starts while another is still building rebuilds the same derivations. With `ci.github.flakeCheck.queue = true;` the workflow uses one concurrency group per branch with GitHub's `queue: max`: runs wait and start one at a time, oldest first, so each one reuses what the previous run uploaded. Every commit still gets its own result, up to 100 waiting runs, which matters if a release checks for a successful run on an exact commit. A burst of pushes now takes longer to reach the newest commit, since its run waits for the ones before it.
+
+## Build matrix
+
+With `ci.github.flakeCheck.matrix = true;` (and `ci.github.cache = "hestia";`) the flake-check job becomes two job kinds, built with [hestia's build matrix](https://github.com/Mic92/hestia#build-matrix-eval-once-build-in-parallel):
+
+- `eval` evaluates the flake once with `nix flake check --no-build`, lints the pushed commit, and lists the checks whose outputs are not cached yet.
+- One `build` job per listed check runs on its own runner, so checks build in parallel. Cached checks get no job.
+
+Checks with the same `meta.hestia.group` share one runner, and `meta.hestia.os` overrides a check's runner labels. flake-ci's own light checks (`workflow-orphans`, `actionlint`, and `checks.treefmt`) use the group `"light"`; put your small checks in that group too.
+
+The matrix covers `.#checks.x86_64-linux` only: a Linux runner cannot build other systems' checks, and hestia's default runner map would send darwin checks to macOS runners. Uncached dependencies shared by several checks are built by each job that needs them. Hestia limits a matrix to 256 jobs. `nix-eval-jobs` comes from the runner's nixpkgs registry, not from flake-ci's pinned nixpkgs.
 
 ## Development
 

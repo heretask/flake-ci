@@ -92,4 +92,20 @@ in {
   # Flake config from the checkout is never trusted in CI.
   nixRun = "nix run --option accept-flake-config false";
   flakeCheck = "nix flake check -L --option accept-flake-config false";
+  flakeCheckNoBuild = "nix flake check -L --no-build --option accept-flake-config false";
+  nixBuild = "nix build -L --option accept-flake-config false";
+
+  # Evaluates the flake once and lists the checks that are not cached yet. `flake` limits the matrix
+  # to one system. Build jobs run on `runner`: hestia's default runner map would ignore it.
+  # nix-eval-jobs comes from the runner's nixpkgs registry.
+  hestiaMatrix = nixRun: flake: runner: {
+    id = "matrix";
+    name = "Build matrix (hestia)";
+    uses = "Mic92/hestia/matrix@dfed9ced335d28978ba74e513939a10db1f71025"; # v3.1.0
+    "with" = {
+      inherit flake;
+      runner-map = "x86_64-linux=${runner}";
+      nix-eval-jobs = "${nixRun} nixpkgs#nix-eval-jobs --";
+    };
+  };
 }

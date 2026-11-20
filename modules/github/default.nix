@@ -55,6 +55,18 @@ in {
       '';
     };
 
+    flakeCheck.matrix = mkOption {
+      type = types.bool;
+      default = false;
+      example = true;
+      description = ''
+        Replace the flake-check job with a hestia build matrix: an `eval` job evaluates the flake once,
+        then one `build` job per check that is not cached yet, each on its own runner. Checks with the
+        same `meta.hestia.group` share a runner; `meta.hestia.os` overrides a check's runner labels.
+        Needs `cache = "hestia"`.
+      '';
+    };
+
     cache = mkOption {
       type = types.enum ["magic-nix-cache" "hestia"];
       default = "magic-nix-cache";
@@ -127,7 +139,7 @@ in {
 
       checks = {
         # `files` only writes configured paths; workflows it does not own must go.
-        workflow-orphans = pkgs.runCommandLocal "workflow-orphans" {} (
+        workflow-orphans = pkgs.runCommandLocal "workflow-orphans" {meta.hestia.group = "light";} (
           if orphans == []
           then ''touch "$out"''
           else ''
@@ -140,7 +152,10 @@ in {
           # actionlint does not know concurrency.queue yet (rhysd/actionlint#657).
           ignoreQueue = lib.optionalString cfg.flakeCheck.queue "-ignore ${lib.escapeShellArg ''unexpected key "queue" for "concurrency" section''} ";
         in
-          pkgs.runCommandLocal "actionlint" {nativeBuildInputs = [pkgs.actionlint];} ''
+          pkgs.runCommandLocal "actionlint" {
+            nativeBuildInputs = [pkgs.actionlint];
+            meta.hestia.group = "light";
+          } ''
             mkdir -p .github
             cp -r ${rendered} .github/workflows
             actionlint ${ignoreQueue}.github/workflows/*.yaml
