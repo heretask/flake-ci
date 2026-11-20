@@ -8,6 +8,7 @@ A [flake-parts](https://flake.parts) module for repository automation, configure
   One `Release` run prepares `main` (the release App pushes the `VERSION`/`CHANGELOG.md` commit itself, so it must be allowed to bypass the rules on `main`), waits for the flake check on that commit unless `skip_ci` is set, then tags and moves the channel. `release stable` needs no RC: it tags any prepared commit, whether or not an RC points at it.
 - **GitHub workflows**: PR-title lint, flake check on `main`, optional macOS check, scheduled flake-input update PRs, and release workflows, rendered into `.github/workflows`.
 - **Nix formatting**: alejandra, statix, and deadnix through [treefmt-nix](https://github.com/numtide/treefmt-nix).
+- **Vulnerability scanning**: `nix run .#vuln -- <target>` scans runtime closures, release directories, and lockfiles with pinned sbomnix, grype, and osv-scanner. Also available alone as `flakeModules.vuln`. See [Vulnerability scanning](#vulnerability-scanning).
 
 Generated files (workflows, `cog.toml`) are committed and written by [mightyiam/files](https://github.com/mightyiam/files): `nix run .#write-files` regenerates them, and each has a `files:<path>` check that fails when it is stale. A check depends only on its own committed file and what generates it, so a binary cache skips it on commits that touch neither. `checks.workflow-orphans` fails on workflow files that no `ci.github.workflows` entry owns.
 
@@ -73,6 +74,7 @@ Then run `nix run .#write-files` and commit the generated files.
 | `ci.github.darwinCheck` | `false` | Manually dispatched flake check on macOS. |
 | `ci.github.extraNixConfig` | `""` | Extra `nix.conf` lines for the Nix installer, e.g. binary caches. |
 | `ci.github.inputUpdates.<input>.schedule` | `{}` | Scheduled PR updating one flake input. |
+| `ci.github.inputUpdates.<input>.appToken.{clientIdVariable,privateKeySecret}` | `null` | GitHub App that opens the update PR, so the PR's checks run. Without it the PR is opened with the workflow's token, which starts no workflows. |
 | `ci.github.workflows.<stem>` | presets | Add workflows or override preset fields. |
 | `ci.github.handWritten` | `[]` | Stems of committed workflows written by hand. `workflow-orphans` accepts them and `actionlint` checks them. |
 | `ci.release.enable` | `false` | `release` app, generated `cog.toml`, Release workflow. |
@@ -82,6 +84,7 @@ Then run `nix run .#write-files` and commit the generated files.
 | `ci.release.notify.{repository,eventType}` | `null` | `repository_dispatch` to another repository when a channel branch moves. |
 | `ci.release.notify.prebuildEventType` | `null` | Second `repository_dispatch`, sent when a release is requested, so the receiver can build the commit before the channel moves. |
 | `ci.nixFormat.{enable,paths,excludes}` | off | treefmt Nix formatters and `checks.treefmt` over `paths`. |
+| `ci.vuln.targets.<name>.{closures,dirs,lockfiles,accepts}` | `{}` | Vulnerability scan targets, per system. See [Vulnerability scanning](#vulnerability-scanning). |
 
 Every workflow runs Nix with `--option accept-flake-config false`.
 
@@ -110,6 +113,54 @@ Checks with the same `meta.hestia.group` share one runner, and `meta.hestia.os` 
 
 The matrix covers `.#checks.x86_64-linux` only: a Linux runner cannot build other systems' checks, and hestia's default runner map would send darwin checks to macOS runners. Uncached dependencies shared by several checks are built by each job that needs them. Hestia limits a matrix to 256 jobs. `nix-eval-jobs` comes from your flake's `nixpkgs` input at its locked revision; a flake without an input of that name gets it from the runner's nixpkgs registry.
 
+## Vulnerability scanning
+
+Declare targets under `perSystem`. Every field is a list, defaulting to `[]`:
+
+```nix
+perSystem = {config, ...}: {
+  ci.vuln.targets.api = {
+    closures = [config.packages.server];       # runtime closure: sbomnix SBOM, then grype
+    dirs = [config.packages.api];              # grype dir:, e.g. Erlang/OTP and Elixir in a Mix release
+    lockfiles = ["${self}/api/mix.lock"];      # osv-scanner; a string, so the file name survives
+    accepts = [
+      {
+        id = "CVE-2026-117656";                # any alias works
+        package = "assent";                    # optional; narrows closures and dirs only
+        reason = "Only used in dev";
+        until = "2027-01-31";
+      }
+    ];
+  };
+};
+```
+
+`nix run .#vuln -- api` exits 0 when the target is clear and non-zero on a finding or any scanner error. `--quick` runs only the lockfile lane and builds nothing, for PR checks. `packages.vuln` and `apps.vuln` exist once a target is declared.
+
+| Lane | Scanner | Fails on |
+| --- | --- | --- |
+| `lockfiles` | `osv-scanner scan source` | any finding not accepted |
+| `closures` | sbomnix CycloneDX SBOM, then `grype sbom:` | a fixed high or critical finding |
+| `closures`, Alpine pass | the same SBOM with each versioned package relabelled `pkg:apk/alpine/<name>@<version>-r0`, then `grype sbom:` | a fixed high or critical finding |
+| `dirs` | `grype dir:` | a fixed high or critical finding |
+
+Each grype lane then lists the findings that have no upstream fix, most at risk first. They never fail the scan; accept one or patch the package yourself. The Alpine pass matches packages against Alpine's security database, which often lists a fix before NVD gives it a CPE. A CVE that a nixpkgs patch resolves (sbomnix records it in `pedigree`) is ignored for that package name and version only. An accept stops applying after its `until` date, so the finding fails the scan again. osv-scanner ignores by ID only, so `package` does not narrow an accept in the lockfile lane.
+
+Each target is also published as plain data at `vuln.<system>.<name>`, derivations as `"<drv>^<output>"` strings. Another flake adds to it with `lib.mkMerge`, keeping both repositories' accepts:
+
+```nix
+perSystem = {system, ...}: {
+  ci.vuln.targets.prod = lib.mkMerge [
+    inputs.platform.vuln.${system}.api
+    {closures = [self.nixosConfigurations.prod.config.system.build.toplevel];}
+  ];
+};
+```
+
+The scanners come from flake-ci's own `nixpkgs-vuln` input, not from the `nixpkgs` a consumer makes flake-ci follow. sbomnix before 1.9.0 labels the kernel, glibc, and curl with CPE vendors NVD does not use, which hides every finding for them. `nix` comes from `PATH`.
+
 ## Development
 
 `nix flake check` runs the tool self-tests against a fixture consumer (`tests/`) plus this repository's own generated files and formatting.
+
+`nix run .#vuln-selftest` (Linux) checks the pinned scanners against the live grype database: sbomnix must label the kernel `o:linux:linux_kernel`, glibc `gnu:glibc` and curl `haxx:curl`, and grype must report NGINX2Shell (CVE-2026-123007) for nginx 1.30.4. It reads the build graph of a canary derivation, so it downloads only the grype database. The `vuln-selftest` workflow runs it weekly and on PRs that touch `flake.lock` or the scanner, and fails when `nixpkgs` or `nixpkgs-vuln` is locked to a revision older than 30 days. `nixpkgs` and `nixpkgs-vuln` get weekly update PRs.

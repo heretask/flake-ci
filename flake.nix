@@ -1,8 +1,10 @@
 {
-  description = "flake-parts module: commit convention, signoff, releases, generated GitHub workflows, Nix formatting";
+  description = "flake-parts module: commit convention, signoff, releases, generated GitHub workflows, Nix formatting, vulnerability scanning";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    # Scanners for ci.vuln. Consumers do not follow it, so the tool set tested here is the one they run.
+    nixpkgs-vuln.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-parts.url = "github:hercules-ci/flake-parts";
     flake-parts.inputs.nixpkgs-lib.follows = "nixpkgs";
 
@@ -19,6 +21,7 @@
   outputs = inputs:
     inputs.flake-parts.lib.mkFlake {inherit inputs;} ({flake-parts-lib, ...}: let
       ciModule = flake-parts-lib.importApply ./modules {localInputs = inputs;};
+      vulnModule = flake-parts-lib.importApply ./modules/vuln {localInputs = inputs;};
     in {
       systems = [
         "x86_64-linux"
@@ -29,12 +32,21 @@
       imports = [
         ciModule
         (import ./tests {inherit ciModule inputs;})
+        (import ./tests/vuln.nix {inherit vulnModule inputs;})
+        (import ./tests/vuln-selftest.nix {inherit inputs;})
       ];
 
-      flake.flakeModules.default = ciModule;
+      flake.flakeModules = {
+        default = ciModule;
+        vuln = vulnModule;
+      };
 
       # flake-ci's own repository.
       ci = {
+        github.inputUpdates = {
+          nixpkgs.schedule = "17 4 * * 1";
+          nixpkgs-vuln.schedule = "47 4 * * 1";
+        };
         nixFormat = {
           enable = true;
           paths = [

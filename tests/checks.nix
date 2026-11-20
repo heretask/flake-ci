@@ -171,6 +171,19 @@ in {
         assert buildJob.permissions.actions == "read";
           pkgs.runCommandLocal "matrix-job" {} "touch $out";
 
+      # An App token opens the update PR, so its checks run without anyone approving them.
+      input-update-token = let
+        job = stem: github.workflows.${stem}.jobs.update;
+        update = stem: lib.last (job stem).steps;
+      in
+        assert (builtins.head (job "update-app-input").steps).id == "app-token";
+        assert (update "update-app-input")."with".token == "\${{ steps.app-token.outputs.token }}";
+        assert !(lib.hasInfix "Approve workflow runs" (update "update-app-input")."with".pr-body);
+        assert github.workflows.update-app-input.permissions == {contents = "read";};
+        assert !((update "update-plain-input")."with" ? token);
+        assert lib.hasInfix "Approve workflow runs" (update "update-plain-input")."with".pr-body;
+          pkgs.runCommandLocal "input-update-token" {} "touch $out";
+
       # Cheap checks share the "light" runner group, so hestia runs them on one job.
       flake-ci-groups = assert config.checks.workflow-orphans.meta.hestia.group == "light";
       assert config.checks.actionlint.meta.hestia.group == "light";

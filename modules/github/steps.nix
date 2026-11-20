@@ -38,9 +38,29 @@ in {
     };
   };
 
+  flakeChecker = {
+    name = "Check flake.lock (v14)";
+    uses = "DeterminateSystems/flake-checker-action@786422608c7bded2bbc9741ad9f91356842bf520"; # v14
+  };
+
   updateFlakeLock = "DeterminateSystems/update-flake-lock@da03c0f078bc4b2c37ee4f7e072d34bf8f188bb3"; # v29
-  createAppToken = "actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510"; # v3.3.0
   createPullRequest = "peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1"; # v8.1.1
+
+  # Writes `steps.app-token.outputs.token`. `app` names the App in the step name.
+  appToken = app: {
+    clientIdVariable,
+    privateKeySecret,
+  }: permissions: {
+    name = "Create ${app} App token (v3.3.0)";
+    id = "app-token";
+    uses = "actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510"; # v3.3.0
+    "with" =
+      {
+        client-id = "\${{ vars.${clientIdVariable} }}";
+        private-key = "\${{ secrets.${privateKeySecret} }}";
+      }
+      // permissions;
+  };
 
   reclaimDisk = {
     name = "Reclaim hosted runner disk";

@@ -110,6 +110,25 @@ in {
           type = types.str;
           description = "Cron schedule (UTC).";
         };
+        options.appToken = mkOption {
+          default = null;
+          description = ''
+            GitHub App that opens the update PR, so the PR's checks run. Events from the workflow's
+            own token start no workflows. The App needs contents and pull-requests write.
+          '';
+          type = types.nullOr (types.submodule {
+            options = {
+              clientIdVariable = mkOption {
+                type = types.str;
+                description = "Repository variable with the App client ID.";
+              };
+              privateKeySecret = mkOption {
+                type = types.str;
+                description = "Repository secret with the App private key.";
+              };
+            };
+          });
+        };
       });
     };
 
