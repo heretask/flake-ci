@@ -97,7 +97,9 @@ in {
 
   # Evaluates the flake once and lists the checks that are not cached yet. `flake` limits the matrix
   # to one system. Build jobs run on `runner`: hestia's default runner map would ignore it.
-  # nix-eval-jobs comes from the runner's nixpkgs registry.
+  # nix-eval-jobs comes from the consumer's `nixpkgs` input, which earlier steps already fetched;
+  # the runner's registry nixpkgs would be downloaded only for this. Without such an input,
+  # `--inputs-from .` changes nothing and the registry is used.
   hestiaMatrix = nixRun: flake: runner: {
     id = "matrix";
     name = "Build matrix (hestia)";
@@ -105,7 +107,7 @@ in {
     "with" = {
       inherit flake;
       runner-map = "x86_64-linux=${runner}";
-      nix-eval-jobs = "${nixRun} nixpkgs#nix-eval-jobs --";
+      nix-eval-jobs = "${nixRun} --inputs-from . nixpkgs#nix-eval-jobs --";
     };
   };
 }

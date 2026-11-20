@@ -108,7 +108,7 @@ With `ci.github.flakeCheck.matrix = true;` (and `ci.github.cache = "hestia";`) t
 
 Checks with the same `meta.hestia.group` share one runner, and `meta.hestia.os` overrides a check's runner labels. flake-ci's own light checks (`workflow-orphans`, `actionlint`, `checks.treefmt`, and the `files:<path>` checks) use the group `"light"`; put your small checks in that group too.
 
-The matrix covers `.#checks.x86_64-linux` only: a Linux runner cannot build other systems' checks, and hestia's default runner map would send darwin checks to macOS runners. Uncached dependencies shared by several checks are built by each job that needs them. Hestia limits a matrix to 256 jobs. `nix-eval-jobs` comes from the runner's nixpkgs registry, not from flake-ci's pinned nixpkgs.
+The matrix covers `.#checks.x86_64-linux` only: a Linux runner cannot build other systems' checks, and hestia's default runner map would send darwin checks to macOS runners. Uncached dependencies shared by several checks are built by each job that needs them. Hestia limits a matrix to 256 jobs. `nix-eval-jobs` comes from your flake's `nixpkgs` input at its locked revision; a flake without an input of that name gets it from the runner's nixpkgs registry.
 
 ## Development
 

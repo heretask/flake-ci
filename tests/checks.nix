@@ -161,6 +161,8 @@ in {
         assert github.flakeCheck.matrix;
         assert !(nixCheck.jobs ? flake-check);
         assert (stepWith "Mic92/hestia/matrix@" evalJob) != {};
+        # The evaluator is pinned by the consumer's lock, not by the runner's registry.
+        assert lib.hasInfix " --inputs-from . nixpkgs#nix-eval-jobs " (stepWith "Mic92/hestia/matrix@" evalJob)."with".nix-eval-jobs;
         assert evalJob.outputs ? manifest-version;
         assert buildJob.needs == "eval";
         assert buildJob.strategy.matrix == "\${{ fromJSON(needs.eval.outputs.matrix) }}";
