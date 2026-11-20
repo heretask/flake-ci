@@ -1,0 +1,15 @@
+# Written by hand; ci.github.handWritten keeps workflow-orphans from rejecting it.
+name: Manual
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  hello:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Say hello
+        run: echo hello

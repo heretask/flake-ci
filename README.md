@@ -63,6 +63,7 @@ Then run `nix run .#write-files` and commit the generated files.
 | `ci.signoff.skipChecks` | `[]` | `checks` attributes `signoff` does not build; `nix flake check` and main's workflow still build them. |
 | `ci.github.enable` | `true` | Generated workflows. |
 | `ci.github.runner` | `"ubuntu-24.04"` | Linux runner. |
+| `ci.github.flakeCheck.enable` | `true` | `false` drops the `nix-check` workflow, for a repository that checks its flake in its own workflow. The Release workflow needs it. |
 | `ci.github.flakeCheck.runner` | `ci.github.runner` | Runner for the flake-check job, e.g. a larger runner. |
 | `ci.github.flakeCheck.timeoutMinutes` | `30` | Timeout in minutes for the flake-check job. |
 | `ci.github.flakeCheck.reclaimDisk` | `"foreground"` | `"background"` frees preinstalled toolchains from the runner disk without blocking the flake-check job. See [Runner disk](#runner-disk). |
@@ -73,6 +74,7 @@ Then run `nix run .#write-files` and commit the generated files.
 | `ci.github.extraNixConfig` | `""` | Extra `nix.conf` lines for the Nix installer, e.g. binary caches. |
 | `ci.github.inputUpdates.<input>.schedule` | `{}` | Scheduled PR updating one flake input. |
 | `ci.github.workflows.<stem>` | presets | Add workflows or override preset fields. |
+| `ci.github.handWritten` | `[]` | Stems of committed workflows written by hand. `workflow-orphans` accepts them and `actionlint` checks them. |
 | `ci.release.enable` | `false` | `release` app, generated `cog.toml`, Release workflow. |
 | `ci.release.repository` | — | `owner/repo` for changelog links. |
 | `ci.release.branches.{rc,stable}` | `"unstable"`, `"stable"` | Channel branches. |

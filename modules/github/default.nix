@@ -17,6 +17,17 @@ in {
       description = "Runner for Linux jobs.";
     };
 
+    flakeCheck.enable = mkOption {
+      type = types.bool;
+      default = true;
+      example = false;
+      description = ''
+        Generate the `nix-check` workflow that checks the flake on `main`. Turn it off in a repository
+        that checks its flake in a workflow of its own. The Release workflow waits for `nix-check`,
+        so keep it on with `ci.release.enable`.
+      '';
+    };
+
     flakeCheck.runner = mkOption {
       type = types.str;
       default = cfg.runner;
@@ -102,6 +113,16 @@ in {
       });
     };
 
+    handWritten = mkOption {
+      type = types.listOf types.str;
+      default = [];
+      example = ["deploy"];
+      description = ''
+        File stems of committed workflows that are written by hand instead of generated.
+        `workflow-orphans` accepts them and `actionlint` checks them with the generated ones.
+      '';
+    };
+
     workflows = mkOption {
       description = ''
         Workflows by file stem, rendered to `.github/workflows/<stem>.yaml`.
@@ -133,7 +154,7 @@ in {
         lib.optionals (builtins.pathExists dir) (
           builtins.filter (lib.hasSuffix ".yaml") (builtins.attrNames (builtins.readDir dir))
         );
-      orphans = lib.subtractLists (map (stem: "${stem}.yaml") (builtins.attrNames cfg.workflows)) committed;
+      orphans = lib.subtractLists (map (stem: "${stem}.yaml") (builtins.attrNames cfg.workflows ++ cfg.handWritten)) committed;
     in {
       files.file = lib.mapAttrs' (stem: _: lib.nameValuePair (path stem) {source = "${rendered}/${stem}.yaml";}) cfg.workflows;
 
@@ -143,7 +164,7 @@ in {
           if orphans == []
           then ''touch "$out"''
           else ''
-            printf 'Unconfigured workflow, delete it or add it to ci.github.workflows: .github/workflows/%s\n' ${lib.escapeShellArgs orphans} >&2
+            printf 'Unconfigured workflow, delete it or add it to ci.github.workflows or ci.github.handWritten: .github/workflows/%s\n' ${lib.escapeShellArgs orphans} >&2
             exit 1
           ''
         );
@@ -158,6 +179,11 @@ in {
           } ''
             mkdir -p .github
             cp -r ${rendered} .github/workflows
+            chmod u+w .github/workflows
+            ${lib.concatMapStrings (stem: ''
+                cp ${self}/.github/workflows/${stem}.yaml .github/workflows/
+              '')
+              cfg.handWritten}
             actionlint ${ignoreQueue}.github/workflows/*.yaml
             touch "$out"
           '';

@@ -124,6 +124,18 @@ in {
         };
           pkgs.runCommandLocal "flake-check-job" {} "touch $out";
 
+      # flakeCheck.enable = false drops only the nix-check workflow.
+      flake-check-disabled = let
+        disabled = import ../modules/github/workflows.nix {
+          cfg = github // {flakeCheck = github.flakeCheck // {enable = false;};};
+          inherit commits lib;
+        };
+      in
+        assert github.workflows ? nix-check;
+        assert !(disabled ? nix-check);
+        assert builtins.attrNames disabled == lib.remove "nix-check" (builtins.attrNames plain);
+          pkgs.runCommandLocal "flake-check-disabled" {} "touch $out";
+
       # cache = "hestia" swaps the flake-check cache step and adds what hestia needs.
       hestia-cache = let
         flakeCheck = plain.nix-check.jobs.flake-check;
