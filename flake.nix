@@ -43,6 +43,10 @@
 
       # flake-ci's own repository.
       ci = {
+        github.inputUpdates = {
+          nixpkgs.schedule = "17 4 * * 1";
+          nixpkgs-vuln.schedule = "47 4 * * 1";
+        };
         nixFormat = {
           enable = true;
           paths = [
