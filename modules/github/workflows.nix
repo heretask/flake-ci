@@ -133,7 +133,12 @@ in
       };
     };
 
-    nix-check = {
+    # A null name omits the workflow.
+    ${
+      if cfg.flakeCheck.enable
+      then "nix-check"
+      else null
+    } = {
       name = "Nix";
       on.push.branches = ["main"];
       permissions.contents = "read";
