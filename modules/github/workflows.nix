@@ -48,7 +48,10 @@
         // {wait-manifest-version = "\${{ needs.eval.outputs.manifest-version }}";};
     };
 
-  updateInput = input: {schedule}: let
+  updateInput = input: {
+    schedule,
+    appToken,
+  }: let
     title = "chore: update ${input}";
   in {
     name = "Update ${input}";
@@ -56,10 +59,13 @@
       schedule = [{cron = schedule;}];
       workflow_dispatch = {};
     };
-    permissions = {
-      contents = "write";
-      pull-requests = "write";
-    };
+    permissions =
+      if appToken == null
+      then {
+        contents = "write";
+        pull-requests = "write";
+      }
+      else {contents = "read";};
     concurrency = {
       group = "update-${input}";
       cancel-in-progress = false;
@@ -69,36 +75,47 @@
       "if" = "github.ref == 'refs/heads/main'";
       runs-on = cfg.runner;
       timeout-minutes = 15;
-      steps = [
-        (steps.checkout
-          // {
-            name = "Checkout main (v7.0.1)";
-            "with" = {
-              ref = "main";
-              persist-credentials = false;
-            };
-          })
-        steps.installNix
-        {
-          name = "Update ${input} (v29)";
-          uses = steps.updateFlakeLock;
-          "with" = {
-            inputs = input;
-            nix-options = "--option accept-flake-config false";
-            base = "main";
-            branch = "automation/${input}";
-            commit-msg = title;
-            pr-title = title;
-            pr-body = ''
-              Updates only the `${input}` flake input.
+      steps =
+        lib.optional (appToken != null) (steps.appToken "update" appToken {
+          permission-contents = "write";
+          permission-pull-requests = "write";
+        })
+        ++ [
+          (steps.checkout
+            // {
+              name = "Checkout main (v7.0.1)";
+              "with" = {
+                ref = "main";
+                persist-credentials = false;
+              };
+            })
+          steps.installNix
+          {
+            name = "Update ${input} (v29)";
+            uses = steps.updateFlakeLock;
+            "with" =
+              {
+                inputs = input;
+                nix-options = "--option accept-flake-config false";
+                base = "main";
+                branch = "automation/${input}";
+                commit-msg = title;
+                pr-title = title;
+                pr-body = ''
+                  Updates only the `${input}` flake input.
 
-              This PR is refreshed automatically. Make fixes in a separate PR to `main`.
+                  This PR is refreshed automatically. Make fixes in a separate PR to `main`.
 
-              Approve workflow runs when prompted, then run the normal checks and merge manually.
-            '';
-          };
-        }
-      ];
+                  ${
+                    if appToken == null
+                    then "Approve workflow runs when prompted, then run the normal checks and merge manually."
+                    else "Merge manually once the checks pass."
+                  }
+                '';
+              }
+              // lib.optionalAttrs (appToken != null) {token = "\${{ steps.app-token.outputs.token }}";};
+          }
+        ];
     };
   };
 in

@@ -74,6 +74,7 @@ Then run `nix run .#write-files` and commit the generated files.
 | `ci.github.darwinCheck` | `false` | Manually dispatched flake check on macOS. |
 | `ci.github.extraNixConfig` | `""` | Extra `nix.conf` lines for the Nix installer, e.g. binary caches. |
 | `ci.github.inputUpdates.<input>.schedule` | `{}` | Scheduled PR updating one flake input. |
+| `ci.github.inputUpdates.<input>.appToken.{clientIdVariable,privateKeySecret}` | `null` | GitHub App that opens the update PR, so the PR's checks run. Without it the PR is opened with the workflow's token, which starts no workflows. |
 | `ci.github.workflows.<stem>` | presets | Add workflows or override preset fields. |
 | `ci.github.handWritten` | `[]` | Stems of committed workflows written by hand. `workflow-orphans` accepts them and `actionlint` checks them. |
 | `ci.release.enable` | `false` | `release` app, generated `cog.toml`, Release workflow. |

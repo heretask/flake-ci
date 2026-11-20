@@ -46,10 +46,20 @@
         ci.github.cache = "hestia";
         # ./fixture commits this workflow; the fixture-workflow-orphans and fixture-actionlint checks cover it.
         ci.github.handWritten = ["manual"];
+        ci.github.inputUpdates = {
+          plain-input.schedule = "17 4 * * *";
+          app-input = {
+            schedule = "17 4 * * *";
+            appToken = {
+              clientIdVariable = "UPDATE_APP_CLIENT_ID";
+              privateKeySecret = "UPDATE_APP_PRIVATE_KEY";
+            };
+          };
+        };
       };
   in {
     checks = lib.mapAttrs' (name: lib.nameValuePair "fixture-${name}") (
-      lib.getAttrs ["commitlint" "release-lifecycle" "workflow-behavior" "actionlint" "workflow-orphans" "flake-check-job" "flake-check-disabled" "matrix-job" "flake-ci-groups" "hestia-cache"] consumer.checks.${system}
+      lib.getAttrs ["commitlint" "release-lifecycle" "workflow-behavior" "actionlint" "workflow-orphans" "flake-check-job" "flake-check-disabled" "matrix-job" "flake-ci-groups" "hestia-cache" "input-update-token"] consumer.checks.${system}
     );
   };
 }

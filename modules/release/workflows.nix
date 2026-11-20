@@ -9,17 +9,7 @@
   inherit (steps) nixRun;
   owner = builtins.head (lib.splitString "/" cfg.notify.repository);
 
-  appToken = permissions: {
-    name = "Create release App token (v3.3.0)";
-    id = "app-token";
-    uses = steps.createAppToken;
-    "with" =
-      {
-        client-id = "\${{ vars.${cfg.appToken.clientIdVariable} }}";
-        private-key = "\${{ secrets.${cfg.appToken.privateKeySecret} }}";
-      }
-      // permissions;
-  };
+  appToken = steps.appToken "release" cfg.appToken;
 
   notifyToken = appToken {
     inherit owner;
