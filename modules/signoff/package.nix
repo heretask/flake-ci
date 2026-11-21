@@ -3,6 +3,7 @@
   name ? "signoff",
   check ? true,
   skipChecks ? [],
+  reusePullRequestChecks ? false,
 }: let
   ghSignoff = pkgs.fetchFromGitHub {
     owner = "basecamp";
@@ -21,8 +22,15 @@ in
       pkgs.jujutsu
     ];
     text = ''
+      ${pkgs.lib.optionalString reusePullRequestChecks ''
+        force_local=false
+        if [[ "''${1:-}" == --local ]]; then
+          force_local=true
+          shift
+        fi
+      ''}
       if (( $# != 0 )); then
-        echo "Usage: ${name}" >&2
+        echo "Usage: ${name}${pkgs.lib.optionalString reusePullRequestChecks " [--local]"}" >&2
         exit 1
       fi
 
@@ -109,6 +117,23 @@ in
           exit 1
         fi
       fi
+
+      ${pkgs.lib.optionalString reusePullRequestChecks ''
+        if [[ "$force_local" == false ]]; then
+          if [[ "$(gh api "repos/{owner}/{repo}/commits/$tested_commit/status" \
+            --jq '.statuses[] | select(.context == "signoff" and .state == "success") | .state' 2>/dev/null)" == success ]]; then
+            echo "Already signed off: $tested_commit"
+            exit 0
+          fi
+          if run_url="$(gh api --method GET "repos/{owner}/{repo}/actions/workflows/nix-check-pr.yaml/runs" \
+            -f head_sha="$tested_commit" -f event=pull_request \
+            --jq '[.workflow_runs[] | select(.status != "completed") | .html_url][0] // empty' 2>/dev/null)" && [[ -n "$run_url" ]]; then
+            echo "Nix PR checks are pending: $run_url" >&2
+            echo "Use signoff --local to run the checks locally." >&2
+            exit 75
+          fi
+        fi
+      ''}
 
       ${pkgs.lib.optionalString (check && skipChecks == []) ''
         if ! nix flake check ${nixOptions}; then

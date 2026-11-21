@@ -28,6 +28,20 @@ in {
       '';
     };
 
+    flakeCheck.pullRequests = {
+      enable = lib.mkEnableOption ''
+        Nix checks on same-repository pull requests that publish `signoff` on success.
+        Requires `flakeCheck.enable`.
+      '';
+
+      skipChecks = mkOption {
+        type = types.listOf types.str;
+        default = config.ci.signoff.skipChecks;
+        defaultText = lib.literalExpression "config.ci.signoff.skipChecks";
+        description = "Names of flake checks to omit from PR builds.";
+      };
+    };
+
     flakeCheck.runner = mkOption {
       type = types.str;
       default = cfg.runner;
@@ -156,6 +170,10 @@ in {
     ci.github.workflows = import ./workflows.nix {
       inherit cfg lib;
       inherit (config.ci) commits;
+    };
+
+    flake = lib.mkIf (cfg.flakeCheck.enable && cfg.flakeCheck.pullRequests.enable && cfg.flakeCheck.pullRequests.skipChecks != []) {
+      prChecks = lib.mapAttrs (_: systemConfig: builtins.removeAttrs systemConfig.checks cfg.flakeCheck.pullRequests.skipChecks) config.allSystems;
     };
 
     perSystem = {pkgs, ...}: let

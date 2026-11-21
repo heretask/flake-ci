@@ -124,7 +124,7 @@ in {
         };
           pkgs.runCommandLocal "flake-check-job" {} "touch $out";
 
-      # flakeCheck.enable = false drops only the nix-check workflow.
+      # flakeCheck.enable = false drops both Nix check workflows.
       flake-check-disabled = let
         disabled = import ../modules/github/workflows.nix {
           cfg = github // {flakeCheck = github.flakeCheck // {enable = false;};};
@@ -133,7 +133,7 @@ in {
       in
         assert github.workflows ? nix-check;
         assert !(disabled ? nix-check);
-        assert builtins.attrNames disabled == lib.remove "nix-check" (builtins.attrNames plain);
+        assert builtins.attrNames disabled == builtins.filter (name: !builtins.elem name ["nix-check" "nix-check-pr"]) (builtins.attrNames plain);
           pkgs.runCommandLocal "flake-check-disabled" {} "touch $out";
 
       # cache = "hestia" swaps the flake-check cache step and adds what hestia needs.
@@ -170,6 +170,166 @@ in {
         assert (stepWith "Mic92/hestia@" buildJob)."with".wait-manifest-version == "\${{ needs.eval.outputs.manifest-version }}";
         assert buildJob.permissions.actions == "read";
           pkgs.runCommandLocal "matrix-job" {} "touch $out";
+
+      flake-check-pr = let
+        matrixPR = github.workflows.nix-check-pr;
+        plainPR = plain.nix-check-pr;
+        unfiltered = matrix:
+          (import ../modules/github/workflows.nix {
+            cfg =
+              github
+              // {
+                flakeCheck =
+                  github.flakeCheck
+                  // {
+                    inherit matrix;
+                    pullRequests = github.flakeCheck.pullRequests // {skipChecks = [];};
+                  };
+              };
+            inherit commits lib;
+          }).nix-check-pr;
+        unfilteredMatrixPR = unfiltered true;
+        unfilteredPlainPR = unfiltered false;
+        head = "\${{ github.event.pull_request.head.sha }}";
+        sameRepo = "github.event.pull_request.head.repo.full_name == github.repository";
+        matrixPublish = matrixPR.jobs.publish;
+        publish = builtins.head matrixPublish.steps;
+      in
+        assert matrixPR.on.pull_request == {};
+        assert matrixPR.concurrency
+        == {
+          group = "\${{ github.workflow }}-\${{ github.event.pull_request.number }}";
+          cancel-in-progress = true;
+        };
+        assert matrixPR.jobs.eval."if" == sameRepo;
+        assert plainPR.jobs.flake-check."if" == sameRepo;
+        assert (builtins.head matrixPR.jobs.eval.steps)."with".ref == head;
+        assert (builtins.head plainPR.jobs.flake-check.steps)."with".ref == head;
+        assert (lib.last github.workflows.nix-check.jobs.eval.steps)."with".flake == ".#checks.x86_64-linux";
+        assert (lib.last matrixPR.jobs.eval.steps)."with".flake == ".#prChecks.x86_64-linux";
+        assert (lib.last unfilteredMatrixPR.jobs.eval.steps)."with".flake == ".#checks.x86_64-linux";
+        assert lib.hasInfix ''--raw ".#prChecks.$system"'' (lib.last plainPR.jobs.flake-check.steps).run;
+        assert (lib.last unfilteredPlainPR.jobs.flake-check.steps).name == "Check flake";
+        assert matrixPublish.needs == ["eval" "build"];
+        assert lib.hasInfix "needs.eval.result == 'success'" matrixPublish."if";
+        assert lib.hasInfix "needs.build.result == 'skipped' && needs.eval.outputs.any-jobs == 'false'" matrixPublish."if";
+        assert plainPR.jobs.publish.needs == "flake-check";
+        assert matrixPublish.permissions == {statuses = "write";};
+        assert publish.env.HEAD_SHA == head;
+          pkgs.runCommandLocal "flake-check-pr" {} "touch $out";
+
+      # signoff with pullRequests enabled reuses passing status, defers while CI runs, and allows --local.
+      signoff-pr = let
+        stubGh = pkgs.writeShellScriptBin "gh" ''
+          jq_expr=""
+          endpoint=""
+          while (( $# )); do
+            case "$1" in
+              --jq)
+                jq_expr="$2"
+                shift 2
+                ;;
+              --method|-f|-F)
+                shift 2
+                ;;
+              api)
+                shift
+                ;;
+              *)
+                if [[ -z "$endpoint" ]]; then
+                  endpoint="$1"
+                fi
+                shift
+                ;;
+            esac
+          done
+          case "$endpoint" in
+            */status)
+              if [[ -n "''${STATUS_EXIT:-}" && "$STATUS_EXIT" != 0 ]]; then
+                echo "gh: Not Found (HTTP 404)" >&2
+                exit "$STATUS_EXIT"
+              fi
+              body="$STATUS_JSON"
+              ;;
+            */runs)
+              if [[ -n "''${RUNS_EXIT:-}" && "$RUNS_EXIT" != 0 ]]; then
+                echo "gh: Not Found (HTTP 404)" >&2
+                exit "$RUNS_EXIT"
+              fi
+              body="$RUNS_JSON"
+              ;;
+            *)
+              echo "unexpected gh api endpoint: $endpoint" >&2
+              exit 99
+              ;;
+          esac
+          printf '%s\n' "$body" | ${lib.getExe pkgs.jq} -r "$jq_expr"
+        '';
+        stubNix = pkgs.writeShellScriptBin "nix" ''
+          echo "NIX_CALLED" >&2
+          exit 42
+        '';
+        signoffWithStub = import ../modules/signoff/package.nix {
+          pkgs = pkgs // {gh = stubGh;};
+          reusePullRequestChecks = true;
+        };
+      in
+        pkgs.runCommandLocal "signoff-pr" {
+          # Also build the real packaged signoff so shellcheck covers its reusePullRequestChecks branch.
+          realSignoff = config.packages.signoff;
+          nativeBuildInputs = [pkgs.git stubNix];
+        } ''
+          export HOME="$TMPDIR"
+          git init -q -b main repo
+          git -C repo config user.email test@example.com
+          git -C repo config user.name Test
+          touch repo/file
+          git -C repo add file
+          git -C repo commit -q -m "init"
+          git init -q --bare remote.git
+          git -C repo remote add origin "$PWD/remote.git"
+          git -C repo push -q -u origin main
+          cd repo
+
+          # 1. Existing signoff success exits 0 without invoking nix.
+          output="$(STATUS_JSON='{"statuses":[{"context":"signoff","state":"success"}]}' RUNS_JSON='{"workflow_runs":[]}' ${lib.getExe signoffWithStub} 2>&1)"
+          grep -qF "Already signed off:" <<< "$output"
+
+          # 2. Active run behind a newer completed run still exits 75 and prints its URL.
+          set +e
+          output="$(STATUS_JSON='{"statuses":[]}' RUNS_JSON='{"workflow_runs":[{"status":"completed","html_url":"https://example.test/old"},{"status":"in_progress","html_url":"https://example.test/active"}]}' ${lib.getExe signoffWithStub} 2>&1)"
+          code=$?
+          set -e
+          test "$code" -eq 75
+          grep -qF "https://example.test/active" <<< "$output"
+
+          # 3. --local bypasses the pending CI check and reaches nix.
+          set +e
+          output="$(STATUS_JSON='{"statuses":[]}' RUNS_JSON='{"workflow_runs":[{"status":"in_progress","html_url":"https://example.test/active"}]}' ${lib.getExe signoffWithStub} --local 2>&1)"
+          code=$?
+          set -e
+          test "$code" -eq 1
+          grep -qF "NIX_CALLED" <<< "$output"
+
+          # 4. Empty workflow_runs falls through to nix.
+          set +e
+          output="$(STATUS_JSON='{"statuses":[]}' RUNS_JSON='{"workflow_runs":[]}' ${lib.getExe signoffWithStub} 2>&1)"
+          code=$?
+          set -e
+          test "$code" -eq 1
+          grep -qF "NIX_CALLED" <<< "$output"
+
+          # 5. Missing workflow (HTTP 404 before rollout) falls through silently without gh error noise.
+          set +e
+          output="$(STATUS_JSON='{"statuses":[]}' RUNS_EXIT=1 ${lib.getExe signoffWithStub} 2>&1)"
+          code=$?
+          set -e
+          test "$code" -eq 1
+          grep -qF "NIX_CALLED" <<< "$output"
+          ! grep -qF "HTTP 404" <<< "$output"
+
+          touch "$out"
+        '';
 
       # An App token opens the update PR, so its checks run without anyone approving them.
       input-update-token = let
