@@ -121,13 +121,13 @@ in
       ${pkgs.lib.optionalString reusePullRequestChecks ''
         if [[ "$force_local" == false ]]; then
           if [[ "$(gh api "repos/{owner}/{repo}/commits/$tested_commit/status" \
-            --jq '.statuses[] | select(.context == "signoff" and .state == "success") | .state')" == success ]]; then
+            --jq '.statuses[] | select(.context == "signoff" and .state == "success") | .state' 2>/dev/null)" == success ]]; then
             echo "Already signed off: $tested_commit"
             exit 0
           fi
           if run_url="$(gh api --method GET "repos/{owner}/{repo}/actions/workflows/nix-check-pr.yaml/runs" \
-            -f head_sha="$tested_commit" -f event=pull_request -f per_page=1 \
-            --jq '.workflow_runs[0] | select(.status != "completed") | .html_url // empty')" && [[ -n "$run_url" ]]; then
+            -f head_sha="$tested_commit" -f event=pull_request \
+            --jq '[.workflow_runs[] | select(.status != "completed") | .html_url][0] // empty' 2>/dev/null)" && [[ -n "$run_url" ]]; then
             echo "Nix PR checks are pending: $run_url" >&2
             echo "Use signoff --local to run the checks locally." >&2
             exit 75

@@ -59,6 +59,25 @@
           };
         };
       };
+    plainConsumer =
+      inputs.flake-parts.lib.mkFlake {
+        inputs = inputs // {self = inputs.self // {outPath = ./fixture;};};
+      } {
+        systems = [system];
+        imports = [ciModule];
+      };
+    unfilteredPrConsumer =
+      inputs.flake-parts.lib.mkFlake {
+        inputs = inputs // {self = inputs.self // {outPath = ./fixture;};};
+      } {
+        systems = [system];
+        imports = [ciModule];
+        ci.github.flakeCheck.pullRequests = {
+          enable = true;
+          skipChecks = [];
+        };
+        ci.signoff.skipChecks = ["commitlint"];
+      };
   in {
     checks = let
       prChecks = consumer.prChecks.${system};
@@ -68,8 +87,10 @@
       assert !(prChecks ? commitlint);
       assert prChecks.workflow-orphans.drvPath == allChecks.workflow-orphans.drvPath;
       assert prChecks.workflow-orphans.meta.hestia.group == "light";
+      assert !(plainConsumer ? prChecks);
+      assert !(unfilteredPrConsumer ? prChecks);
         lib.mapAttrs' (name: lib.nameValuePair "fixture-${name}") (
-          lib.getAttrs ["commitlint" "release-lifecycle" "workflow-behavior" "actionlint" "workflow-orphans" "flake-check-job" "flake-check-disabled" "matrix-job" "flake-check-pr" "flake-ci-groups" "hestia-cache" "input-update-token"] allChecks
+          lib.getAttrs ["commitlint" "release-lifecycle" "workflow-behavior" "actionlint" "workflow-orphans" "flake-check-job" "flake-check-disabled" "matrix-job" "flake-check-pr" "signoff-pr" "flake-ci-groups" "hestia-cache" "input-update-token"] allChecks
         );
   };
 }

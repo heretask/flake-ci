@@ -172,9 +172,9 @@ in {
       inherit (config.ci) commits;
     };
 
-    flake.prChecks = lib.mkIf (cfg.flakeCheck.enable && cfg.flakeCheck.pullRequests.enable && cfg.flakeCheck.pullRequests.skipChecks != []) (
-      lib.mapAttrs (_: systemConfig: builtins.removeAttrs systemConfig.checks cfg.flakeCheck.pullRequests.skipChecks) config.allSystems
-    );
+    flake = lib.mkIf (cfg.flakeCheck.enable && cfg.flakeCheck.pullRequests.enable && cfg.flakeCheck.pullRequests.skipChecks != []) {
+      prChecks = lib.mapAttrs (_: systemConfig: builtins.removeAttrs systemConfig.checks cfg.flakeCheck.pullRequests.skipChecks) config.allSystems;
+    };
 
     perSystem = {pkgs, ...}: let
       rendered =
