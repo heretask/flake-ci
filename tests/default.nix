@@ -41,8 +41,9 @@
           reclaimDisk = "background";
           queue = true;
           matrix = true;
-          pullRequests = true;
+          pullRequests.enable = true;
         };
+        ci.signoff.skipChecks = ["commitlint"];
         # Exercise the non-default cache here; flake-ci's own generated workflows cover the default.
         ci.github.cache = "hestia";
         # ./fixture commits this workflow; the fixture-workflow-orphans and fixture-actionlint checks cover it.
@@ -59,8 +60,16 @@
         };
       };
   in {
-    checks = lib.mapAttrs' (name: lib.nameValuePair "fixture-${name}") (
-      lib.getAttrs ["commitlint" "release-lifecycle" "workflow-behavior" "actionlint" "workflow-orphans" "flake-check-job" "flake-check-disabled" "matrix-job" "flake-check-pr" "flake-ci-groups" "hestia-cache" "input-update-token"] consumer.checks.${system}
-    );
+    checks = let
+      prChecks = consumer.prChecks.${system};
+      allChecks = consumer.checks.${system};
+    in
+      assert allChecks ? commitlint;
+      assert !(prChecks ? commitlint);
+      assert prChecks.workflow-orphans.drvPath == allChecks.workflow-orphans.drvPath;
+      assert prChecks.workflow-orphans.meta.hestia.group == "light";
+        lib.mapAttrs' (name: lib.nameValuePair "fixture-${name}") (
+          lib.getAttrs ["commitlint" "release-lifecycle" "workflow-behavior" "actionlint" "workflow-orphans" "flake-check-job" "flake-check-disabled" "matrix-job" "flake-check-pr" "flake-ci-groups" "hestia-cache" "input-update-token"] allChecks
+        );
   };
 }

@@ -20,6 +20,10 @@
       name = "Check flake";
       run = flakeCheck;
     };
+  evaluateFlake = timedStep flakeCheckTimeout {
+    name = "Evaluate flake";
+    run = flakeCheckNoBuild;
+  };
   hestiaJobPermissions = lib.optionalAttrs hestiaCache {
     permissions = {
       actions = "read";
@@ -50,6 +54,11 @@
 
   prHead = "\${{ github.event.pull_request.head.sha }}";
   flakeJobs = pullRequest: let
+    filtered = pullRequest && cfg.flakeCheck.pullRequests.skipChecks != [];
+    checkOutput =
+      if filtered
+      then "prChecks"
+      else "checks";
     checkout =
       if pullRequest
       then
@@ -81,13 +90,10 @@
           steps =
             setupSteps
             ++ [
-              (timedStep flakeCheckTimeout {
-                name = "Evaluate flake";
-                run = flakeCheckNoBuild;
-              })
+              evaluateFlake
               # One system only: the runner cannot build other systems' checks, and hestia's
               # default runner map would send darwin checks to macOS runners.
-              (steps.hestiaMatrix nixRun ".#checks.x86_64-linux" cfg.flakeCheck.runner)
+              (steps.hestiaMatrix nixRun ".#${checkOutput}.x86_64-linux" cfg.flakeCheck.runner)
             ];
         }
         // hestiaJobPermissions
@@ -127,9 +133,23 @@
           timeout-minutes = flakeCheckTimeout;
           steps =
             setupSteps
-            ++ [
-              (checkFlake flakeCheckTimeout)
-            ];
+            ++ (
+              if filtered
+              then [
+                evaluateFlake
+                (timedStep flakeCheckTimeout {
+                  name = "Build PR checks";
+                  run = ''
+                    set -o pipefail
+                    system="$(nix eval --impure --raw --expr builtins.currentSystem)"
+                    nix eval --option accept-flake-config false --raw ".#${checkOutput}.$system" \
+                      --apply 'checks: builtins.concatStringsSep "\n" (map (check: check.drvPath + "^*") (builtins.attrValues checks))' |
+                      ${nixBuild} --no-link --stdin
+                  '';
+                })
+              ]
+              else [(checkFlake flakeCheckTimeout)]
+            );
         }
         // hestiaJobPermissions
         // onlySameRepository;
@@ -260,7 +280,7 @@ in
       jobs = flakeJobs false;
     };
   }
-  // lib.optionalAttrs (cfg.flakeCheck.enable && cfg.flakeCheck.pullRequests) {
+  // lib.optionalAttrs (cfg.flakeCheck.enable && cfg.flakeCheck.pullRequests.enable) {
     nix-check-pr = {
       name = "Nix PR";
       on.pull_request = {};

@@ -28,10 +28,19 @@ in {
       '';
     };
 
-    flakeCheck.pullRequests = lib.mkEnableOption ''
-      Nix checks on same-repository pull requests that publish `signoff` on success.
-      Requires `flakeCheck.enable`.
-    '';
+    flakeCheck.pullRequests = {
+      enable = lib.mkEnableOption ''
+        Nix checks on same-repository pull requests that publish `signoff` on success.
+        Requires `flakeCheck.enable`.
+      '';
+
+      skipChecks = mkOption {
+        type = types.listOf types.str;
+        default = config.ci.signoff.skipChecks;
+        defaultText = lib.literalExpression "config.ci.signoff.skipChecks";
+        description = "Names of flake checks to omit from PR builds.";
+      };
+    };
 
     flakeCheck.runner = mkOption {
       type = types.str;
@@ -162,6 +171,10 @@ in {
       inherit cfg lib;
       inherit (config.ci) commits;
     };
+
+    flake.prChecks = lib.mkIf (cfg.flakeCheck.enable && cfg.flakeCheck.pullRequests.enable && cfg.flakeCheck.pullRequests.skipChecks != []) (
+      lib.mapAttrs (_: systemConfig: builtins.removeAttrs systemConfig.checks cfg.flakeCheck.pullRequests.skipChecks) config.allSystems
+    );
 
     perSystem = {pkgs, ...}: let
       rendered =

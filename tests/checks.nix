@@ -186,6 +186,9 @@ in {
         };
         assert (builtins.head matrixPR.jobs.eval.steps)."with".ref == head;
         assert (builtins.head plainPR.jobs.flake-check.steps)."with".ref == head;
+        assert (lib.last github.workflows.nix-check.jobs.eval.steps)."with".flake == ".#checks.x86_64-linux";
+        assert (lib.last matrixPR.jobs.eval.steps)."with".flake == ".#prChecks.x86_64-linux";
+        assert lib.hasInfix ''--raw ".#prChecks.$system"'' (lib.last plainPR.jobs.flake-check.steps).run;
         assert matrixPublish.needs == ["eval" "build"];
         assert plainPR.jobs.publish.needs == "flake-check";
         assert matrixPublish.permissions == {statuses = "write";};
