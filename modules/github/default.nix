@@ -28,6 +28,11 @@ in {
       '';
     };
 
+    flakeCheck.pullRequests = lib.mkEnableOption ''
+      Nix checks on same-repository pull requests that publish `signoff` on success.
+      Requires `flakeCheck.enable`.
+    '';
+
     flakeCheck.runner = mkOption {
       type = types.str;
       default = cfg.runner;

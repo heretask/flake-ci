@@ -25,6 +25,7 @@
       signoff = import ./package.nix {
         inherit pkgs;
         inherit (config.ci.signoff) skipChecks;
+        reusePullRequestChecks = config.ci.github.enable && config.ci.github.flakeCheck.enable && config.ci.github.flakeCheck.pullRequests;
       };
       signoff-fast = import ./package.nix {
         inherit pkgs;

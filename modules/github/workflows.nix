@@ -48,6 +48,93 @@
         // {wait-manifest-version = "\${{ needs.eval.outputs.manifest-version }}";};
     };
 
+  prHead = "\${{ github.event.pull_request.head.sha }}";
+  flakeJobs = pullRequest: let
+    checkout =
+      if pullRequest
+      then
+        steps.checkout
+        // {
+          "with" = {
+            ref = prHead;
+            persist-credentials = false;
+          };
+        }
+      else steps.checkout;
+    onlySameRepository = lib.optionalAttrs pullRequest {
+      "if" = "github.event.pull_request.head.repo.full_name == github.repository";
+    };
+    setupSteps = [checkout reclaimStep steps.installNix cacheStep] ++ lib.optional (!pullRequest) lintCommit;
+  in
+    if flakeMatrix
+    then {
+      eval =
+        {
+          name = "eval";
+          runs-on = cfg.flakeCheck.runner;
+          timeout-minutes = flakeCheckTimeout;
+          outputs = {
+            matrix = "\${{ steps.matrix.outputs.matrix }}";
+            any-jobs = "\${{ steps.matrix.outputs.any-jobs }}";
+            manifest-version = "\${{ steps.matrix.outputs.manifest-version }}";
+          };
+          steps =
+            setupSteps
+            ++ [
+              (timedStep flakeCheckTimeout {
+                name = "Evaluate flake";
+                run = flakeCheckNoBuild;
+              })
+              # One system only: the runner cannot build other systems' checks, and hestia's
+              # default runner map would send darwin checks to macOS runners.
+              (steps.hestiaMatrix nixRun ".#checks.x86_64-linux" cfg.flakeCheck.runner)
+            ];
+        }
+        // hestiaJobPermissions
+        // onlySameRepository;
+      build =
+        {
+          name = "\${{ matrix.name }}";
+          needs = "eval";
+          "if" = "needs.eval.outputs.any-jobs == 'true'";
+          runs-on = "\${{ matrix.os }}";
+          strategy = {
+            fail-fast = false;
+            matrix = "\${{ fromJSON(needs.eval.outputs.matrix) }}";
+          };
+          timeout-minutes = flakeCheckTimeout;
+          steps = [
+            reclaimStep
+            steps.installNix
+            hestiaBuild
+            {
+              name = "Prefetch drv closure";
+              run = "\"$HESTIA_BIN\" prefetch \${{ matrix.installables }}";
+            }
+            (timedStep flakeCheckTimeout {
+              name = "Build check";
+              run = "${nixBuild} \${{ matrix.installables }}";
+            })
+          ];
+        }
+        // hestiaJobPermissions;
+    }
+    else {
+      flake-check =
+        {
+          name = "flake-check";
+          runs-on = cfg.flakeCheck.runner;
+          timeout-minutes = flakeCheckTimeout;
+          steps =
+            setupSteps
+            ++ [
+              (checkFlake flakeCheckTimeout)
+            ];
+        }
+        // hestiaJobPermissions
+        // onlySameRepository;
+    };
+
   updateInput = input: {
     schedule,
     appToken,
@@ -170,78 +257,50 @@ in
           group = "\${{ github.workflow }}-\${{ github.sha }}";
           cancel-in-progress = true;
         };
+      jobs = flakeJobs false;
+    };
+  }
+  // lib.optionalAttrs (cfg.flakeCheck.enable && cfg.flakeCheck.pullRequests) {
+    nix-check-pr = {
+      name = "Nix PR";
+      on.pull_request = {};
+      permissions.contents = "read";
+      concurrency = {
+        group = "\${{ github.workflow }}-\${{ github.event.pull_request.number }}";
+        cancel-in-progress = true;
+      };
       jobs =
-        if flakeMatrix
-        then {
-          eval =
+        flakeJobs true
+        // {
+          publish =
             {
-              name = "eval";
-              runs-on = cfg.flakeCheck.runner;
-              timeout-minutes = flakeCheckTimeout;
-              outputs = {
-                matrix = "\${{ steps.matrix.outputs.matrix }}";
-                any-jobs = "\${{ steps.matrix.outputs.any-jobs }}";
-                manifest-version = "\${{ steps.matrix.outputs.manifest-version }}";
-              };
+              name = "Publish Nix result";
+              runs-on = cfg.runner;
+              timeout-minutes = 5;
+              permissions.statuses = "write";
               steps = [
-                steps.checkout
-                reclaimStep
-                steps.installNix
-                cacheStep
-                lintCommit
-                (timedStep flakeCheckTimeout {
-                  name = "Evaluate flake";
-                  run = flakeCheckNoBuild;
-                })
-                # One system only: the runner cannot build other systems' checks, and hestia's
-                # default runner map would send darwin checks to macOS runners.
-                (steps.hestiaMatrix nixRun ".#checks.x86_64-linux" cfg.flakeCheck.runner)
-              ];
-            }
-            // hestiaJobPermissions;
-          build =
-            {
-              name = "\${{ matrix.name }}";
-              needs = "eval";
-              "if" = "needs.eval.outputs.any-jobs == 'true'";
-              runs-on = "\${{ matrix.os }}";
-              strategy = {
-                fail-fast = false;
-                matrix = "\${{ fromJSON(needs.eval.outputs.matrix) }}";
-              };
-              timeout-minutes = flakeCheckTimeout;
-              steps = [
-                reclaimStep
-                steps.installNix
-                hestiaBuild
                 {
-                  name = "Prefetch drv closure";
-                  run = "\"$HESTIA_BIN\" prefetch \${{ matrix.installables }}";
+                  name = "Sign off on the tested commit";
+                  env = {
+                    GH_TOKEN = "\${{ github.token }}";
+                    HEAD_SHA = prHead;
+                  };
+                  run = ''
+                    gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$HEAD_SHA" \
+                      -f context=signoff -f state=success -f 'description=Nix PR checks passed' \
+                      -f "target_url=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+                  '';
                 }
-                (timedStep flakeCheckTimeout {
-                  name = "Build check";
-                  run = "${nixBuild} \${{ matrix.installables }}";
-                })
               ];
             }
-            // hestiaJobPermissions;
-        }
-        else {
-          flake-check =
-            {
-              name = "flake-check";
-              runs-on = cfg.flakeCheck.runner;
-              timeout-minutes = flakeCheckTimeout;
-              steps = [
-                steps.checkout
-                reclaimStep
-                steps.installNix
-                cacheStep
-                lintCommit
-                (checkFlake flakeCheckTimeout)
-              ];
-            }
-            // hestiaJobPermissions;
+            // (
+              if flakeMatrix
+              then {
+                needs = ["eval" "build"];
+                "if" = "!cancelled() && !failure() && needs.eval.result == 'success' && (needs.build.result == 'success' || (needs.build.result == 'skipped' && needs.eval.outputs.any-jobs == 'false'))";
+              }
+              else {needs = "flake-check";}
+            );
         };
     };
   }

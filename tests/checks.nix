@@ -124,7 +124,7 @@ in {
         };
           pkgs.runCommandLocal "flake-check-job" {} "touch $out";
 
-      # flakeCheck.enable = false drops only the nix-check workflow.
+      # flakeCheck.enable = false drops both Nix check workflows.
       flake-check-disabled = let
         disabled = import ../modules/github/workflows.nix {
           cfg = github // {flakeCheck = github.flakeCheck // {enable = false;};};
@@ -133,7 +133,7 @@ in {
       in
         assert github.workflows ? nix-check;
         assert !(disabled ? nix-check);
-        assert builtins.attrNames disabled == lib.remove "nix-check" (builtins.attrNames plain);
+        assert builtins.attrNames disabled == builtins.filter (name: !builtins.elem name ["nix-check" "nix-check-pr"]) (builtins.attrNames plain);
           pkgs.runCommandLocal "flake-check-disabled" {} "touch $out";
 
       # cache = "hestia" swaps the flake-check cache step and adds what hestia needs.
@@ -170,6 +170,27 @@ in {
         assert (stepWith "Mic92/hestia@" buildJob)."with".wait-manifest-version == "\${{ needs.eval.outputs.manifest-version }}";
         assert buildJob.permissions.actions == "read";
           pkgs.runCommandLocal "matrix-job" {} "touch $out";
+
+      flake-check-pr = let
+        matrixPR = github.workflows.nix-check-pr;
+        plainPR = plain.nix-check-pr;
+        head = "\${{ github.event.pull_request.head.sha }}";
+        matrixPublish = matrixPR.jobs.publish;
+        publish = builtins.head matrixPublish.steps;
+      in
+        assert matrixPR.on.pull_request == {};
+        assert matrixPR.concurrency
+        == {
+          group = "\${{ github.workflow }}-\${{ github.event.pull_request.number }}";
+          cancel-in-progress = true;
+        };
+        assert (builtins.head matrixPR.jobs.eval.steps)."with".ref == head;
+        assert (builtins.head plainPR.jobs.flake-check.steps)."with".ref == head;
+        assert matrixPublish.needs == ["eval" "build"];
+        assert plainPR.jobs.publish.needs == "flake-check";
+        assert matrixPublish.permissions == {statuses = "write";};
+        assert publish.env.HEAD_SHA == head;
+          pkgs.runCommandLocal "flake-check-pr" {} "touch $out";
 
       # An App token opens the update PR, so its checks run without anyone approving them.
       input-update-token = let

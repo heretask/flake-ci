@@ -65,6 +65,7 @@ Then run `nix run .#write-files` and commit the generated files.
 | `ci.github.enable` | `true` | Generated workflows. |
 | `ci.github.runner` | `"ubuntu-24.04"` | Linux runner. |
 | `ci.github.flakeCheck.enable` | `true` | `false` drops the `nix-check` workflow, for a repository that checks its flake in its own workflow. The Release workflow needs it. |
+| `ci.github.flakeCheck.pullRequests` | `false` | Run Nix on same-repository PR heads and publish `signoff` on success. Requires `flakeCheck.enable`. |
 | `ci.github.flakeCheck.runner` | `ci.github.runner` | Runner for the flake-check job, e.g. a larger runner. |
 | `ci.github.flakeCheck.timeoutMinutes` | `30` | Timeout in minutes for the flake-check job. |
 | `ci.github.flakeCheck.reclaimDisk` | `"foreground"` | `"background"` frees preinstalled toolchains from the runner disk without blocking the flake-check job. See [Runner disk](#runner-disk). |
@@ -112,6 +113,14 @@ With `ci.github.flakeCheck.matrix = true;` (and `ci.github.cache = "hestia";`) t
 Checks with the same `meta.hestia.group` share one runner, and `meta.hestia.os` overrides a check's runner labels. flake-ci's own light checks (`workflow-orphans`, `actionlint`, `checks.treefmt`, and the `files:<path>` checks) use the group `"light"`; put your small checks in that group too.
 
 The matrix covers `.#checks.x86_64-linux` only: a Linux runner cannot build other systems' checks, and hestia's default runner map would send darwin checks to macOS runners. Uncached dependencies shared by several checks are built by each job that needs them. Hestia limits a matrix to 256 jobs. `nix-eval-jobs` comes from your flake's `nixpkgs` input at its locked revision; a flake without an input of that name gets it from the runner's nixpkgs registry.
+
+## Run Nix on pull requests
+
+Set `ci.github.flakeCheck.pullRequests = true;` and run `nix run .#write-files`. Require the `PR title lint` check and the bare `signoff` commit status from any source in your branch ruleset.
+
+Nix PR checks start on open, reopen, and push for same-repository PRs, including upper layers of a stack. A push cancels the older run for that PR. Each run checks out the exact PR head and posts `signoff` on that commit after its checks pass. A new head needs its own result.
+
+`signoff` returns immediately if the tested commit already has a passing `signoff` status. If its Nix PR run is queued or running, the command prints the run URL and exits with status 75. Use `nix run .#signoff -- --local` to run the local suite immediately. The hosted workflow runs the full suite for its runner system. `ci.signoff.skipChecks` applies to local builds.
 
 ## Vulnerability scanning
 

@@ -41,6 +41,7 @@
           reclaimDisk = "background";
           queue = true;
           matrix = true;
+          pullRequests = true;
         };
         # Exercise the non-default cache here; flake-ci's own generated workflows cover the default.
         ci.github.cache = "hestia";
@@ -59,7 +60,7 @@
       };
   in {
     checks = lib.mapAttrs' (name: lib.nameValuePair "fixture-${name}") (
-      lib.getAttrs ["commitlint" "release-lifecycle" "workflow-behavior" "actionlint" "workflow-orphans" "flake-check-job" "flake-check-disabled" "matrix-job" "flake-ci-groups" "hestia-cache" "input-update-token"] consumer.checks.${system}
+      lib.getAttrs ["commitlint" "release-lifecycle" "workflow-behavior" "actionlint" "workflow-orphans" "flake-check-job" "flake-check-disabled" "matrix-job" "flake-check-pr" "flake-ci-groups" "hestia-cache" "input-update-token"] consumer.checks.${system}
     );
   };
 }
