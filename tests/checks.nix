@@ -101,24 +101,27 @@ in {
         plainSteps = stepNames plain.nix-check.jobs.flake-check.steps;
       in
         assert release.version == "1.2.3";
-        assert release.versionFor {} == "1.2.3";
-        assert release.versionFor {stable = true;} == "1.2.3";
-        assert release.versionFor {
-          stable = false;
+        assert release.formatBuildVersion {
+          lastModifiedDate = "20261122065721";
           shortRev = "abc1234";
         }
-        == "1.2.3-rc+abc1234";
-        assert release.versionFor {
-          stable = false;
+        == "1.2.3+202611220657.abc1234";
+        assert release.formatBuildVersion {
+          lastModifiedDate = "20261122065721";
           shortRev = null;
         }
-        == "1.2.3-rc";
-        assert release.versionFor {
-          stable = false;
-          prerelease = "beta";
+        == "1.2.3+202611220657";
+        assert release.formatBuildVersion {
+          lastModifiedDate = null;
           shortRev = "abc1234";
         }
-        == "1.2.3-beta+abc1234";
+        == "1.2.3+abc1234";
+        assert release.formatBuildVersion {
+          lastModifiedDate = null;
+          shortRev = null;
+        }
+        == "1.2.3";
+        assert lib.hasPrefix "1.2.3" release.buildVersion;
         assert builtins.elem "Check VERSION invariance" evalSteps;
         assert builtins.elem "Check VERSION invariance" prEvalSteps;
         assert !(builtins.elem "Check VERSION invariance" plainSteps);

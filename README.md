@@ -81,9 +81,10 @@ Then run `nix run .#write-files` and commit the generated files.
 | `ci.github.handWritten` | `[]` | Stems of committed workflows written by hand. `workflow-orphans` accepts them and `actionlint` checks them. |
 | `ci.release.enable` | `false` | `release` app, generated `cog.toml`, Release workflow. |
 | `ci.release.repository` | — | `owner/repo` for changelog links. |
-| `ci.release.versionFile` | `self + "/VERSION"` | Path to the `VERSION` file read by `ci.release.version` and `ci.release.versionFor`. |
+| `ci.release.versionFile` | `self + "/VERSION"` | Path to the `VERSION` file read by `ci.release.version` and `ci.release.buildVersion`. |
 | `ci.release.version` | read-only | Trimmed SemVer string read lazily from `ci.release.versionFile`. |
-| `ci.release.versionFor` | read-only | Function `{ stable ? true, prerelease ? "rc", shortRev ? self.shortRev or null } -> string` returning `<VERSION>` or `<VERSION>-<prerelease>[+<shortRev>]`. |
+| `ci.release.buildVersion` | read-only | Environment-agnostic SemVer build ID `<VERSION>+<YYYYMMDDHHMM>.<shortRev>` derived lazily from `VERSION`, `self.lastModifiedDate`, and `self.shortRev`. |
+| `ci.release.formatBuildVersion` | read-only | Function `{ version ? ci.release.version, lastModifiedDate ? self.lastModifiedDate or null, shortRev ? self.shortRev or null } -> string`. |
 | `ci.release.checkVersionInvariance` | `false` | Add a `Check VERSION invariance` step to `nix-check` and `nix-check-pr` verifying `VERSION` bumps invalidate no check derivations. |
 | `ci.release.branches.{rc,stable}` | `"unstable"`, `"stable"` | Channel branches. |
 | `ci.release.appToken.{clientIdVariable,privateKeySecret}` | — | GitHub App credentials the release workflows use. |
@@ -133,7 +134,7 @@ PR builds use the local `ci.signoff.skipChecks` exclusions by default. Set `ci.g
 
 Because `Release` pushes a `chore: prepare vX.Y.Z` commit that touches only `VERSION` and `CHANGELOG.md` and then waits for `nix-check.yaml`, checks whose derivations read `VERSION` rebuild on every release.
 
-- Parameterize release packages with `version ? config.ci.release.version` (or derive RC vs. stable versions via `config.ci.release.versionFor { stable = env == "prod"; }`), and pin checks to a constant such as `version = "0.0.0"`.
+- Parameterize release packages with `version ? config.ci.release.version` (or stamp an immutable commit build ID via `config.ci.release.buildVersion`), and pin checks to a constant such as `version = "0.0.0"`.
 - Run `nix run .#release -- check-version-invariance` locally, or set `ci.release.checkVersionInvariance = true;` to fail `nix-check` and `nix-check-pr` if any check's `.drvPath` changes when `VERSION` is mutated.
 
 ## Vulnerability scanning

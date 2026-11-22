@@ -20,7 +20,7 @@ in {
       type = types.path;
       default = self + "/VERSION";
       defaultText = lib.literalExpression ''self + "/VERSION"'';
-      description = "Path to the SemVer VERSION file read by `ci.release.version` and `ci.release.versionFor`.";
+      description = "Path to the SemVer VERSION file read by `ci.release.version` and `ci.release.buildVersion`.";
     };
 
     version = mkOption {
@@ -29,13 +29,20 @@ in {
       description = "Trimmed SemVer read lazily from `ci.release.versionFile`.";
     };
 
-    versionFor = mkOption {
+    buildVersion = mkOption {
+      type = types.str;
+      readOnly = true;
+      description = ''
+        Environment-agnostic SemVer build identifier `<VERSION>+<YYYYMMDDHHMM>.<shortRev>`,
+        derived lazily from `ci.release.version`, `self.lastModifiedDate`, and `self.shortRev`.
+      '';
+    };
+
+    formatBuildVersion = mkOption {
       type = types.functionTo types.str;
       readOnly = true;
       description = ''
-        Derive a build-time release version string from `ci.release.version` and `self.shortRev`:
-        `{ stable ? true, prerelease ? "rc", shortRev ? self.shortRev or null } -> string`.
-        Returns `<VERSION>` when `stable` is true, or `<VERSION>-<prerelease>[+<shortRev>]` otherwise.
+        Format `<version>+<YYYYMMDDHHMM>.<shortRev>` from `{ version ? ci.release.version, lastModifiedDate ? self.lastModifiedDate or null, shortRev ? self.shortRev or null }`.
       '';
     };
 
@@ -97,14 +104,18 @@ in {
   config = lib.mkIf cfg.enable {
     ci.release.version = lib.trim (builtins.readFile cfg.versionFile);
 
-    ci.release.versionFor = {
-      stable ? true,
-      prerelease ? "rc",
+    ci.release.formatBuildVersion = {
+      version ? cfg.version,
+      lastModifiedDate ? self.lastModifiedDate or null,
       shortRev ? self.shortRev or null,
-    }:
-      if stable
-      then cfg.version
-      else "${cfg.version}-${prerelease}${lib.optionalString (shortRev != null) "+${shortRev}"}";
+    }: let
+      buildStamp = lib.concatStringsSep "." (
+        lib.optional (lastModifiedDate != null) (builtins.substring 0 12 lastModifiedDate)
+        ++ lib.optional (shortRev != null) shortRev
+      );
+    in "${version}${lib.optionalString (buildStamp != "") "+${buildStamp}"}";
+
+    ci.release.buildVersion = cfg.formatBuildVersion {};
 
     ci.github.workflows = import ./workflows.nix {
       inherit cfg lib;
