@@ -4,7 +4,7 @@
   lib,
   ...
 }: let
-  inherit (config.ci) commits github;
+  inherit (config.ci) commits github release;
   # The non-matrix workflows, for the checks that cover the flake-check job.
   plain = import ../modules/github/workflows.nix {
     cfg = github // {flakeCheck = github.flakeCheck // {matrix = false;};};
@@ -93,6 +93,36 @@ in {
           python3 -m unittest test_release.py
           touch "$out"
         '';
+
+      release-version = let
+        stepNames = steps: map (step: step.name or null) steps;
+        evalSteps = stepNames github.workflows.nix-check.jobs.eval.steps;
+        prEvalSteps = stepNames github.workflows.nix-check-pr.jobs.eval.steps;
+        plainSteps = stepNames plain.nix-check.jobs.flake-check.steps;
+      in
+        assert release.version == "1.2.3";
+        assert release.versionFor {} == "1.2.3";
+        assert release.versionFor {stable = true;} == "1.2.3";
+        assert release.versionFor {
+          stable = false;
+          shortRev = "abc1234";
+        }
+        == "1.2.3-rc+abc1234";
+        assert release.versionFor {
+          stable = false;
+          shortRev = null;
+        }
+        == "1.2.3-rc";
+        assert release.versionFor {
+          stable = false;
+          prerelease = "beta";
+          shortRev = "abc1234";
+        }
+        == "1.2.3-beta+abc1234";
+        assert builtins.elem "Check VERSION invariance" evalSteps;
+        assert builtins.elem "Check VERSION invariance" prEvalSteps;
+        assert !(builtins.elem "Check VERSION invariance" plainSteps);
+          pkgs.runCommandLocal "release-version-check" {} "touch $out";
 
       workflow-behavior = pkgs.runCommand "workflow-behavior-check" {nativeBuildInputs = [pkgs.bash pkgs.python3];} ''
         python3 ${../modules/release/test_workflows.py} ${pkgs.writeText "workflows.json" (builtins.toJSON (

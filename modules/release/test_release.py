@@ -585,6 +585,47 @@ class ReleaseLifecycleTest(unittest.TestCase):
         )
         self.assertNotIn("miscategorised", changelog)
 
+    def test_check_version_invariance_passes_when_drvs_match(self):
+        (self.repo / "VERSION").write_text("1.2.3\n")
+        run(["git", "add", "VERSION"], cwd=self.repo)
+        run(["git", "commit", "-m", "chore: add version"], cwd=self.repo)
+        seen_versions: list[str] = []
+
+        def fake_eval(flake_dir: Path, output: str, system: str) -> dict[str, str]:
+            seen_versions.append((flake_dir / "VERSION").read_text().strip())
+            self.assertEqual(output, "checks")
+            self.assertEqual(system, "x86_64-linux")
+            return {"unit": "/nix/store/aaa-unit.drv", "lint": "/nix/store/bbb-lint.drv"}
+
+        with mock.patch("release.eval_check_drvs", side_effect=fake_eval):
+            self.assertEqual(
+                main(["check-version-invariance", "--system", "x86_64-linux"]), 0
+            )
+        self.assertEqual(seen_versions, ["1.2.3", "999.999.999"])
+        self.assertEqual((self.repo / "VERSION").read_text(), "1.2.3\n")
+
+    def test_check_version_invariance_fails_and_names_coupled_checks(self):
+        (self.repo / "VERSION").write_text("1.2.3\n")
+        run(["git", "add", "VERSION"], cwd=self.repo)
+        run(["git", "commit", "-m", "chore: add version"], cwd=self.repo)
+
+        def fake_eval(flake_dir: Path, _output: str, _system: str) -> dict[str, str]:
+            vsn = (flake_dir / "VERSION").read_text().strip()
+            return {
+                "unit": "/nix/store/aaa-unit.drv",
+                "app-build": f"/nix/store/{vsn}-app-build.drv",
+            }
+
+        with mock.patch("release.eval_check_drvs", side_effect=fake_eval):
+            stderr = StringIO()
+            with redirect_stderr(stderr):
+                self.assertEqual(
+                    main(["check-version-invariance", "--system", "x86_64-linux"]), 1
+                )
+        self.assertIn("app-build", stderr.getvalue())
+        self.assertNotIn("unit", stderr.getvalue())
+        self.assertEqual((self.repo / "VERSION").read_text(), "1.2.3\n")
+
 
 if __name__ == "__main__":
     unittest.main()

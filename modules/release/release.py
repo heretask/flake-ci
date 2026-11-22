@@ -2,14 +2,16 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
-from tempfile import NamedTemporaryFile
+from tempfile import NamedTemporaryFile, TemporaryDirectory
 from typing import Mapping, Sequence
 
 STABLE_TAG = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
@@ -581,6 +583,111 @@ def cmd_stable(root: Path, config: Config) -> int:
     return 0
 
 
+def mirror_tracked_files(root: Path, dest: Path, copy_paths: frozenset[str]) -> None:
+    listed = subprocess.run(
+        ["git", "ls-files", "-z"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        env=git_env(),
+    ).stdout
+    for raw in listed.split(b"\0"):
+        if not raw:
+            continue
+        rel = os.fsdecode(raw)
+        src = root / rel
+        if not src.exists() and not src.is_symlink():
+            continue
+        target = dest / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if src.is_symlink():
+            os.symlink(os.readlink(src), target)
+        elif rel in copy_paths:
+            shutil.copy2(src, target)
+        else:
+            try:
+                os.link(src, target)
+            except OSError:
+                shutil.copy2(src, target)
+
+
+def eval_check_drvs(flake_dir: Path, output: str, system: str) -> dict[str, str]:
+    result = subprocess.run(
+        [
+            "nix",
+            "eval",
+            "--option",
+            "accept-flake-config",
+            "false",
+            "--json",
+            f"path:{flake_dir}#{output}.{system}",
+            "--apply",
+            "checks: builtins.mapAttrs (_: check: check.drvPath) checks",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise ReleaseError(result.stderr.strip() or f"nix eval failed with status {result.returncode}")
+    return json.loads(result.stdout)
+
+
+def current_nix_system() -> str:
+    result = subprocess.run(
+        [
+            "nix",
+            "eval",
+            "--option",
+            "accept-flake-config",
+            "false",
+            "--impure",
+            "--raw",
+            "--expr",
+            "builtins.currentSystem",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise ReleaseError(result.stderr.strip() or "could not determine current Nix system")
+    return result.stdout.strip()
+
+
+def cmd_check_version_invariance(
+    root: Path,
+    config: Config,
+    system: str | None,
+    output: str,
+    probe_version: str,
+) -> int:
+    version_path = root / config.version_file
+    if not version_path.is_file():
+        raise ReleaseError(f"missing {config.version_file}")
+    original = version_path.read_text().strip()
+    mutated = probe_version if probe_version != original else "999.999.998"
+    target_system = system or current_nix_system()
+
+    with TemporaryDirectory(prefix="release-version-check-") as tmp:
+        mirror = Path(tmp) / "repo"
+        mirror.mkdir()
+        mirror_tracked_files(root, mirror, frozenset({config.version_file}))
+        before = eval_check_drvs(mirror, output, target_system)
+        (mirror / config.version_file).write_text(f"{mutated}\n")
+        after = eval_check_drvs(mirror, output, target_system)
+
+    changed = sorted(
+        name for name in set(before) | set(after) if before.get(name) != after.get(name)
+    )
+    if changed:
+        names = ", ".join(changed)
+        raise ReleaseError(
+            f"changing {config.version_file} ({original} -> {mutated}) invalidated "
+            f"{len(changed)} check(s) in {output}.{target_system}: {names}"
+        )
+    print(f"OK: {len(before)} check(s) in {output}.{target_system} are independent of {config.version_file}")
+    return 0
+
+
 def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(prog="release")
     parser.add_argument("--version-file", default=os.environ.get("RELEASE_VERSION_FILE", "VERSION"))
@@ -593,13 +700,29 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     notes.add_argument("tag")
     prepare = sub.add_parser("prepare")
     prepare.add_argument("--check", action="store_true")
+    invariance = sub.add_parser("check-version-invariance")
+    invariance.add_argument("--system", default=None)
+    invariance.add_argument("--output", default="checks")
+    invariance.add_argument("--probe-version", default="999.999.999")
     return parser.parse_args(argv)
+
+
+def git_toplevel(cwd: Path | None = None) -> Path:
+    start = cwd or Path.cwd()
+    result = git(["rev-parse", "--show-toplevel"], cwd=start, check=False)
+    if result.returncode != 0:
+        raise ReleaseError("release must run from a Git repository")
+    return Path(result.stdout.strip())
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv if argv is not None else sys.argv[1:])
     config = Config(version_file=args.version_file, changelog_file=args.changelog_file)
     try:
+        if args.command == "check-version-invariance":
+            return cmd_check_version_invariance(
+                git_toplevel(), config, args.system, args.output, args.probe_version
+            )
         root = repo_root()
         if args.command == "status":
             return cmd_status(root, config)

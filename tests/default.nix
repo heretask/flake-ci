@@ -21,6 +21,7 @@
         ci.release = {
           enable = true;
           repository = "example/app";
+          checkVersionInvariance = true;
           appToken = {
             clientIdVariable = "RELEASE_APP_CLIENT_ID";
             privateKeySecret = "RELEASE_APP_PRIVATE_KEY";
@@ -90,7 +91,7 @@
       assert !(plainConsumer ? prChecks);
       assert !(unfilteredPrConsumer ? prChecks);
         lib.mapAttrs' (name: lib.nameValuePair "fixture-${name}") (
-          lib.getAttrs ["commitlint" "release-lifecycle" "workflow-behavior" "actionlint" "workflow-orphans" "flake-check-job" "flake-check-disabled" "matrix-job" "flake-check-pr" "signoff-pr" "flake-ci-groups" "hestia-cache" "input-update-token"] allChecks
+          lib.getAttrs ["commitlint" "release-lifecycle" "release-version" "workflow-behavior" "actionlint" "workflow-orphans" "flake-check-job" "flake-check-disabled" "matrix-job" "flake-check-pr" "signoff-pr" "flake-ci-groups" "hestia-cache" "input-update-token"] allChecks
         );
   };
 }
