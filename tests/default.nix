@@ -47,6 +47,7 @@
         ci.signoff.skipChecks = ["commitlint"];
         # Exercise the non-default cache here; flake-ci's own generated workflows cover the default.
         ci.github.cache = "hestia";
+        ci.github.hestiaGc.pushTtlDays = 3;
         # ./fixture commits this workflow; the fixture-workflow-orphans and fixture-actionlint checks cover it.
         ci.github.handWritten = ["manual"];
         ci.github.inputUpdates = {

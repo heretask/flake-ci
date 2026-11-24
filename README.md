@@ -73,6 +73,7 @@ Then run `nix run .#write-files` and commit the generated files.
 | `ci.github.flakeCheck.queue` | `false` | `true` runs main's flake checks one at a time in push order. See [Queued checks](#queued-checks). |
 | `ci.github.flakeCheck.matrix` | `false` | `true` replaces the flake-check job with an eval job and one build job per uncached check. Needs `ci.github.cache = "hestia"`. See [Build matrix](#build-matrix). |
 | `ci.github.cache` | `"magic-nix-cache"` | Nix binary cache for flake-check jobs: `"magic-nix-cache"` or `"hestia"`. |
+| `ci.github.hestiaGc.pushTtlDays` | `null` | Days `hestia-gc` keeps a store path after its last push; `null` is hestia's default of 14. See [Hestia cache](#hestia-cache). |
 | `ci.github.darwinCheck` | `false` | Manually dispatched flake check on macOS. |
 | `ci.github.extraNixConfig` | `""` | Extra `nix.conf` lines for the Nix installer, e.g. binary caches. |
 | `ci.github.inputUpdates.<input>.schedule` | `{}` | Scheduled PR updating one flake input. |
@@ -98,6 +99,8 @@ Every workflow runs Nix with `--option accept-flake-config false`.
 ## Hestia cache
 
 Set `ci.github.cache = "hestia";` to use [Mic92/hestia](https://github.com/Mic92/hestia) instead of Magic Nix Cache for flake-check jobs. Magic Nix Cache hits GitHub's Actions cache rate limit (1500 downloads per minute per repository) and then disables itself for the rest of the run. Hestia stores NARs as a few large chunked packs, so it needs far fewer cache entries. In this mode the hestia step is pinned to v3.1.0, flake-check jobs get `actions: read` for hestia's eviction check, and the Check flake step times out 10 minutes before its job so hestia's upload drain still runs. A daily `hestia-gc` workflow with `actions: write` garbage-collects the cache.
+
+Hestia refuses to read a cache manifest that decodes to more than 256 MiB ([Mic92/hestia#192](https://github.com/Mic92/hestia/issues/192)). Past that size flake-check jobs log `stored manifest is corrupt`, start from an empty cache and rebuild everything, and `hestia-gc` fails every night on the oversized manifest version. `hestia-gc` keeps every path pushed in the last 14 days, so a repository that pushes many paths can reach the limit before anything is collected. Set `ci.github.hestiaGc.pushTtlDays` lower, e.g. `3`, to collect unreferenced paths sooner.
 
 ## Runner disk
 

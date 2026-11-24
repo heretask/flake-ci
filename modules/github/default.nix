@@ -103,6 +103,18 @@ in {
       '';
     };
 
+    hestiaGc.pushTtlDays = mkOption {
+      type = types.nullOr types.ints.positive;
+      default = null;
+      example = 3;
+      description = ''
+        Days the `hestia-gc` workflow keeps a store path after its last push, even when no branch's
+        latest build references it. `null` keeps hestia's default of 14. Lower it when the cache
+        manifest nears hestia's 256 MiB decode limit: past it, flake-check jobs start from an empty
+        cache and `hestia-gc` fails (Mic92/hestia#192).
+      '';
+    };
+
     darwinCheck = lib.mkEnableOption "a manually dispatched flake check on macOS";
 
     extraNixConfig = mkOption {
