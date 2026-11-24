@@ -149,6 +149,7 @@ perSystem = {config, ...}: {
   ci.vuln.targets.api = {
     closures = [config.packages.server];       # runtime closure: sbomnix SBOM, then grype
     dirs = [config.packages.api];              # grype dir:, e.g. Erlang/OTP and Elixir in a Mix release
+    sboms = [config.packages.api-sbom];        # CycloneDX JSON file you build; osv-scanner
     lockfiles = ["${self}/api/mix.lock"];      # osv-scanner; a string, so the file name survives
     accepts = [
       {
@@ -167,11 +168,14 @@ perSystem = {config, ...}: {
 | Lane | Scanner | Fails on |
 | --- | --- | --- |
 | `lockfiles` | `osv-scanner scan source` | any finding not accepted |
+| `sboms` | `osv-scanner scan source` on each file | any finding not accepted |
 | `closures` | sbomnix CycloneDX SBOM, then `grype sbom:` | a fixed high or critical finding |
 | `closures`, Alpine pass | the same SBOM with each versioned package relabelled `pkg:apk/alpine/<name>@<version>-r0`, then `grype sbom:` | a fixed high or critical finding |
 | `dirs` | `grype dir:` | a fixed high or critical finding |
 
-Each grype lane then lists the findings that have no upstream fix, most at risk first. They never fail the scan; accept one or patch the package yourself. The Alpine pass matches packages against Alpine's security database, which often lists a fix before NVD gives it a CPE. A CVE that a nixpkgs patch resolves (sbomnix records it in `pedigree`) is ignored for that package name and version only. An accept stops applying after its `until` date, so the finding fails the scan again. osv-scanner ignores by ID only, so `package` does not narrow an accept in the lockfile lane.
+Each grype lane then lists the findings that have no upstream fix, most at risk first. They never fail the scan; accept one or patch the package yourself. The Alpine pass matches packages against Alpine's security database, which often lists a fix before NVD gives it a CPE. A CVE that a nixpkgs patch resolves (sbomnix records it in `pedigree`) is ignored for that package name and version only. An accept stops applying after its `until` date, so the finding fails the scan again. osv-scanner ignores by ID only, so `package` does not narrow an accept in the lockfile and SBOM lanes.
+
+Use `sboms` for packages the other lanes cannot see in what you ship. grype has no Hex advisories, for example, so `grype dir:` on a Mix release covers only Erlang/OTP and Elixir; a derivation that lists the release's Hex packages as `pkg:hex/<name>@<version>` components closes that gap, and reads the versions from the build instead of a lockfile. Each entry is a derivation whose output is one CycloneDX JSON file. A file without components fails the scan.
 
 Each target is also published as plain data at `vuln.<system>.<name>`, derivations as `"<drv>^<output>"` strings. Another flake adds to it with `lib.mkMerge`, keeping both repositories' accepts:
 
@@ -190,4 +194,4 @@ The scanners come from flake-ci's own `nixpkgs-vuln` input, not from the `nixpkg
 
 `nix flake check` runs the tool self-tests against a fixture consumer (`tests/`) plus this repository's own generated files and formatting.
 
-`nix run .#vuln-selftest` (Linux) checks the pinned scanners against the live grype database: sbomnix must label the kernel `o:linux:linux_kernel`, glibc `gnu:glibc` and curl `haxx:curl`, and grype must report NGINX2Shell (CVE-2026-123007) for nginx 1.30.4. It reads the build graph of a canary derivation, so it downloads only the grype database. The `vuln-selftest` workflow runs it weekly and on PRs that touch `flake.lock` or the scanner, and fails when `nixpkgs` or `nixpkgs-vuln` is locked to a revision older than 30 days. `nixpkgs` and `nixpkgs-vuln` get weekly update PRs.
+`nix run .#vuln-selftest` (Linux) checks the pinned scanners against the live grype database: sbomnix must label the kernel `o:linux:linux_kernel`, glibc `gnu:glibc` and curl `haxx:curl`, and grype must report NGINX2Shell (CVE-2026-123007) for nginx 1.30.4, and osv-scanner must report EEF-CVE-2026-117656 for assent 0.2.13 in a CycloneDX file. It reads the build graph of a canary derivation, so it downloads only the grype database and queries osv.dev. The `vuln-selftest` workflow runs it weekly and on PRs that touch `flake.lock` or the scanner, and fails when `nixpkgs` or `nixpkgs-vuln` is locked to a revision older than 30 days. `nixpkgs` and `nixpkgs-vuln` get weekly update PRs.

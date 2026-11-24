@@ -71,11 +71,24 @@ in {
     # Never built: sbomnix reads the build-time graph from the .drv files, so only the grype
     # database is downloaded. A plain drvPath would make every output in the graph a dependency.
     canaryDrv = builtins.unsafeDiscardOutputDependency canary.drvPath;
+    # assent 0.2.13 is affected by EEF-CVE-2026-117656.
+    sbomCanary = tools.writeText "vuln-canary.cdx.json" (builtins.toJSON {
+      bomFormat = "CycloneDX";
+      specVersion = "1.5";
+      components = [
+        {
+          type = "library";
+          name = "assent";
+          version = "0.2.13";
+          purl = "pkg:hex/assent@0.2.13";
+        }
+      ];
+    });
   in {
     packages = lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
       vuln-selftest = pkgs.writeShellApplication {
         name = "vuln-selftest";
-        runtimeInputs = [tools.grype tools.jq tools.sbomnix];
+        runtimeInputs = [tools.grype tools.jq tools.osv-scanner tools.sbomnix];
         text = ''
           work=$(mktemp -d)
           trap 'rm -rf "$work"' EXIT
@@ -100,8 +113,16 @@ in {
             rc=1
           fi
 
+          # The sboms lane, as vuln.sh runs it.
+          cp ${sbomCanary} "$work/canary.cdx.json"
+          osv-scanner scan source --format json --lockfile="$work/canary.cdx.json" >"$work/canary.osv.json" || true
+          if ! jq -e 'any(.results[]?.packages[]?; .package.name == "assent" and any(.groups[]; (.ids + .aliases) | index("EEF-CVE-2026-117656")))' "$work/canary.osv.json" >/dev/null; then
+            echo "FAIL: osv-scanner does not report EEF-CVE-2026-117656 for pkg:hex/assent@0.2.13 in a CycloneDX file" >&2
+            rc=1
+          fi
+
           if ((rc == 0)); then
-            echo "vuln-selftest: sbomnix CPEs and grype NGINX2Shell detection OK"
+            echo "vuln-selftest: sbomnix CPEs, grype NGINX2Shell detection and osv-scanner CycloneDX detection OK"
           fi
           exit "$rc"
         '';
