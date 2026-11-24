@@ -30,7 +30,7 @@
           package = mkOption {
             type = types.nullOr types.str;
             default = null;
-            description = "Package name the accept is limited to in closures and dirs. osv-scanner cannot scope by package, so lockfiles ignore the ID everywhere.";
+            description = "Package name the accept is limited to. `null` accepts the ID for every package.";
           };
           reason = mkOption {
             type = types.str;
@@ -67,7 +67,7 @@ in {
       type = types.attrsOf target;
       default = {};
       description = ''
-        Scan targets for `nix run .#vuln -- <name> [--quick]`. Every field is a list, so `lib.mkMerge`
+        Scan targets for `nix run .#vuln -- <name> [--quick] [--out DIR]`. Every field is a list, so `lib.mkMerge`
         of a target another flake publishes at `vuln.<system>.<name>` adds to it.
       '';
     };

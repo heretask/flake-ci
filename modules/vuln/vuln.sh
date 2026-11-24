@@ -1,64 +1,138 @@
 # Prepended by default.nix: system, vuln_jq (directory holding vuln.jq).
-if (($# == 0 || $# > 2)) || { (($# == 2)) && [[ $2 != --quick ]]; }; then
-  echo "Usage: vuln <target> [--quick]" >&2
+usage() {
+  echo "Usage: vuln <target> [--quick] [--out DIR]" >&2
   exit 2
-fi
-target=$1
-quick=${2:-}
+}
+target=""
+mode=full
+outdir=""
+while (($#)); do
+  case $1 in
+    --quick) mode=quick ;;
+    --out)
+      (($# > 1)) || usage
+      outdir=$2
+      shift
+      ;;
+    -*) usage ;;
+    *)
+      [[ -z $target ]] || usage
+      target=$1
+      ;;
+  esac
+  shift
+done
+[[ -n $target ]] || usage
 
-manifest=$(nix eval --json ".#vuln.$system.\"$target\"")
 work=$(mktemp -d)
-trap 'rm -rf "$work"' EXIT
+# Exit 1 says "scanned, and findings block". A scan that dies half-way must not say that.
+finished=""
+trap 'rm -rf "$work"; [[ -n $finished ]] || exit 3' EXIT
 today=$(date -u +%F)
-rc=0
+: >"$work/findings.jsonl"
 
+errors=()
+problem() {
+  errors+=("$1")
+  echo "vuln: $1" >&2
+}
 render() { jq -L "$vuln_jq" "include \"vuln\"; $1" "${@:2}"; }
 realise() { nix build --no-link --print-out-paths "$1"; }
 
-render "osv_toml(\"$today\")" -r <<<"$manifest" >"$work/osv.toml"
-render "accept_rules(\"$today\")" <<<"$manifest" >"$work/accepts.json"
-jq '{ignore: .}' "$work/accepts.json" >"$work/grype.yaml"
+# osv <lane> <what> <osv-scanner argument>...
+osv() {
+  local status=0
+  osv-scanner scan source --format json "${@:3}" >"$work/scan.json" || status=$?
+  # 1 is "findings". Above it the scan failed; 128 is an input without packages.
+  if ((status > 1)); then
+    problem "$2: osv-scanner exited $status"
+  else
+    render "osv_findings(\"$1\")" -c "$work/scan.json" >>"$work/findings.jsonl"
+  fi
+}
+
+# grype_scan <lane> <what> <input> [config]
+grype_scan() {
+  local status=0
+  grype "$3" ${4:+--config "$4"} -o json >"$work/scan.json" || status=$?
+  if ((status)); then
+    problem "$2: grype exited $status"
+  else
+    render "grype_findings(\"$1\")" -c "$work/scan.json" >>"$work/findings.jsonl"
+  fi
+}
+
+if ! manifest=$(nix eval --json ".#vuln.$system.\"$target\""); then
+  problem "target $target: evaluation failed"
+  manifest='{"closures": [], "dirs": [], "sboms": [], "lockfiles": [], "accepts": []}'
+fi
 
 mapfile -t lockfiles < <(jq -r '.lockfiles[]' <<<"$manifest")
 if ((${#lockfiles[@]})); then
   echo "vuln: lockfiles ${lockfiles[*]}" >&2
-  osv-scanner scan source --config "$work/osv.toml" "${lockfiles[@]/#/--lockfile=}" || rc=1
+  osv lockfile "lockfiles ${lockfiles[*]}" "${lockfiles[@]/#/--lockfile=}"
 fi
-[[ $quick == --quick ]] && exit "$rc"
 
-mapfile -t sboms < <(jq -r '.sboms[]' <<<"$manifest")
-for i in "${!sboms[@]}"; do
-  out=$(realise "${sboms[i]}")
-  echo "vuln: sbom $out" >&2
-  # osv-scanner picks the parser by file name.
-  cp "$out" "$work/sbom-$i.cdx.json"
-  osv-scanner scan source --config "$work/osv.toml" --lockfile="$work/sbom-$i.cdx.json" || rc=1
-done
+if [[ $mode == full ]]; then
+  mapfile -t sboms < <(jq -r '.sboms[]' <<<"$manifest")
+  for i in "${!sboms[@]}"; do
+    if ! out=$(realise "${sboms[i]}"); then
+      problem "sbom ${sboms[i]}: build failed"
+      continue
+    fi
+    echo "vuln: sbom $out" >&2
+    # osv-scanner picks the parser by file name.
+    cp "$out" "$work/sbom-$i.cdx.json"
+    osv sbom "sbom $out" --lockfile="$work/sbom-$i.cdx.json"
+  done
 
-# Findings without an upstream fix are listed, most at risk first, and never fail the scan.
-grype_scan() {
-  grype "$1" --config "$2" --fail-on high --only-fixed || rc=1
-  echo "vuln: not fixed upstream (report only)" >&2
-  grype "$1" --config "$2" --only-notfixed || rc=1
-}
+  mapfile -t closures < <(jq -r '.closures[]' <<<"$manifest")
+  for i in "${!closures[@]}"; do
+    if ! out=$(realise "${closures[i]}"); then
+      problem "closure ${closures[i]}: build failed"
+      continue
+    fi
+    echo "vuln: closure $out" >&2
+    sbom=$work/closure-$i.cdx.json
+    if ! sbomnix "$out" --cdx "$sbom" --csv /dev/null --spdx /dev/null >&2; then
+      problem "closure $out: sbomnix failed"
+      continue
+    fi
+    render '{ignore: patched_rules}' "$sbom" >"$work/closure-$i.yaml"
+    grype_scan closure "closure $out" "sbom:$sbom" "$work/closure-$i.yaml"
+    echo "vuln: closure $out (Alpine secdb)" >&2
+    render alpine "$sbom" >"$work/closure-$i.alpine.cdx.json"
+    grype_scan closure "closure $out (Alpine secdb)" "sbom:$work/closure-$i.alpine.cdx.json" "$work/closure-$i.yaml"
+  done
 
-mapfile -t closures < <(jq -r '.closures[]' <<<"$manifest")
-for i in "${!closures[@]}"; do
-  out=$(realise "${closures[i]}")
-  echo "vuln: closure $out" >&2
-  sbom=$work/closure-$i.cdx.json
-  sbomnix "$out" --cdx "$sbom" --csv /dev/null --spdx /dev/null >&2
-  render '{ignore: (.[0] + (.[1] | patched_rules))}' -s "$work/accepts.json" "$sbom" >"$work/closure-$i.yaml"
-  grype_scan "sbom:$sbom" "$work/closure-$i.yaml"
-  echo "vuln: closure $out (Alpine secdb)" >&2
-  render alpine "$sbom" >"$work/closure-$i.alpine.cdx.json"
-  grype_scan "sbom:$work/closure-$i.alpine.cdx.json" "$work/closure-$i.yaml"
-done
+  mapfile -t dirs < <(jq -r '.dirs[]' <<<"$manifest")
+  for d in "${dirs[@]}"; do
+    if ! out=$(realise "$d"); then
+      problem "dir $d: build failed"
+      continue
+    fi
+    echo "vuln: dir $out" >&2
+    grype_scan dir "dir $out" "dir:$out"
+  done
+fi
 
-mapfile -t dirs < <(jq -r '.dirs[]' <<<"$manifest")
-for d in "${dirs[@]}"; do
-  out=$(realise "$d")
-  echo "vuln: dir $out" >&2
-  grype_scan "dir:$out" "$work/grype.yaml"
-done
-exit "$rc"
+# shellcheck disable=SC2016 # jq's variables, not the shell's
+render 'report($manifest; $target; $mode; $today; $errors)' -s \
+  --argjson manifest "$manifest" --arg target "$target" --arg mode "$mode" --arg today "$today" \
+  --argjson errors "$(jq -n '$ARGS.positional' --args "${errors[@]}")" \
+  "$work/findings.jsonl" >"$work/findings.json"
+render summary -r "$work/findings.json" >"$work/summary.md"
+cat "$work/summary.md"
+if [[ -n $outdir ]]; then
+  mkdir -p "$outdir"
+  cp "$work/findings.json" "$work/summary.md" "$outdir/"
+fi
+
+finished=1
+if ((${#errors[@]})); then
+  exit 3
+fi
+if jq -e 'any(.findings[]; .blocking)' "$work/findings.json" >/dev/null; then
+  exit 1
+fi
+exit 0
