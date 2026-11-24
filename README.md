@@ -216,7 +216,7 @@ ci.github.vuln = {
 
 A scan result changes when an advisory is published and when what you ship changes. The schedule covers the first. `fullScanPaths` covers the second: list the paths that decide what a target ships, so a change is scanned when it is made. The grype database is rebuilt about once a day, so a full scan more often than daily finds little; osv.dev lists advisories within the hour, which is what `quick.schedule` is for.
 
-A scheduled failure opens an issue titled `Vulnerability scan failed` (`Vulnerability scan failed (lockfiles)` for the quick scan) and the next scheduled pass closes it; turn that off with `failureIssue = false`. The workflow's matrix holds the target names of `ci.github.vuln.system` (`x86_64-linux`), so adding a target changes the workflow file: run `nix run .#write-files`. `runner`, `timeoutMinutes` (60) and `nothingButNix` size the full-scan jobs, which use `ci.github.cache`.
+A finding fails the run, scheduled or not; the workflows write nothing else to the forge. The workflow's matrix holds the target names of `ci.github.vuln.system` (`x86_64-linux`), so adding a target changes the workflow file: run `nix run .#write-files`. `runner`, `timeoutMinutes` (60) and `nothingButNix` size the full-scan jobs, which use `ci.github.cache`.
 
 ## Development
 

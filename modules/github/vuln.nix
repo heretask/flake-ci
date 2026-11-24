@@ -14,7 +14,6 @@
   targets = builtins.attrNames (config.allSystems.${cfg.system}.ci.vuln.targets or {});
 
   hestiaCache = github.cache == "hestia";
-  onSchedule = "github.event_name == 'schedule'";
   checkout = steps.checkout // {"with".persist-credentials = false;};
   tokenSteps = lib.optional (cfg.inputToken != null) (steps.appToken "input" {inherit (cfg.inputToken) clientIdVariable privateKeySecret;} {
     owner = "\${{ github.repository_owner }}";
@@ -28,40 +27,6 @@
   concurrency = {
     group = "\${{ github.workflow }}-\${{ github.event.pull_request.number || github.ref }}";
     cancel-in-progress = "\${{ github.event_name == 'pull_request' }}";
-  };
-
-  # One open issue per title: opened by the first scheduled failure, closed by the next scheduled pass.
-  report = title: needs: {
-    name = "report";
-    inherit needs;
-    "if" = "always() && ${onSchedule}";
-    runs-on = github.runner;
-    timeout-minutes = 5;
-    permissions.issues = "write";
-    steps = [
-      {
-        name = "Open or close the failure issue";
-        env = {
-          GH_TOKEN = "\${{ github.token }}";
-          GH_REPO = "\${{ github.repository }}";
-          TITLE = title;
-          PASSED = "\${{ !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}";
-          RUN_URL = "\${{ github.server_url }}/\${{ github.repository }}/actions/runs/\${{ github.run_id }}";
-        };
-        run = ''
-          number=$(gh issue list --state open --search "in:title \"$TITLE\"" --json number,title --jq 'map(select(.title == env.TITLE))[0].number // empty')
-          if [[ $PASSED == true ]]; then
-            if [[ -n $number ]]; then
-              gh issue close "$number" --comment "The scheduled scan passed: $RUN_URL"
-            fi
-          elif [[ -z $number ]]; then
-            gh issue create --title "$TITLE" --body "The scheduled scan failed: $RUN_URL
-
-          This issue closes itself when a scheduled scan passes."
-          fi
-        '';
-      }
-    ];
   };
 
   full = {
@@ -116,7 +81,7 @@
         # Its own job, so a stale pin does not hide the scan results.
         staleness = {
           name = "staleness";
-          "if" = "${onSchedule} || github.event_name == 'workflow_dispatch'";
+          "if" = "github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'";
           runs-on = github.runner;
           timeout-minutes = 5;
           permissions.contents = "read";
@@ -132,9 +97,6 @@
               })
           ];
         };
-      }
-      // lib.optionalAttrs cfg.failureIssue {
-        report = report "Vulnerability scan failed" (["scan"] ++ lib.optional (cfg.nixpkgsKeys != []) "staleness");
       };
   };
 
@@ -146,36 +108,32 @@
       // lib.optionalAttrs (cfg.quick.schedule != null) {schedule = [{cron = cfg.quick.schedule;}];};
     permissions = {};
     inherit concurrency;
-    jobs =
-      {
-        lockfiles = {
-          name = "lockfiles";
-          runs-on = github.runner;
-          timeout-minutes = 20;
-          permissions.contents = "read";
-          steps =
-            [checkout]
-            ++ tokenSteps
-            ++ [
-              steps.installNix
-              {
-                name = "Scan lockfiles";
-                env = scanEnv;
-                # Every target, so one finding does not hide another target's.
-                run = ''
-                  rc=0
-                  for target in ${lib.escapeShellArgs targets}; do
-                    nix run .#vuln -- "$target" --quick || rc=1
-                  done
-                  exit "$rc"
-                '';
-              }
-            ];
-        };
-      }
-      // lib.optionalAttrs (cfg.failureIssue && cfg.quick.schedule != null) {
-        report = report "Vulnerability scan failed (lockfiles)" ["lockfiles"];
+    jobs = {
+      lockfiles = {
+        name = "lockfiles";
+        runs-on = github.runner;
+        timeout-minutes = 20;
+        permissions.contents = "read";
+        steps =
+          [checkout]
+          ++ tokenSteps
+          ++ [
+            steps.installNix
+            {
+              name = "Scan lockfiles";
+              env = scanEnv;
+              # Every target, so one finding does not hide another target's.
+              run = ''
+                rc=0
+                for target in ${lib.escapeShellArgs targets}; do
+                  nix run .#vuln -- "$target" --quick || rc=1
+                done
+                exit "$rc"
+              '';
+            }
+          ];
       };
+    };
   };
 in {
   options.ci.github.vuln = {
@@ -272,15 +230,6 @@ in {
           };
         };
       });
-    };
-
-    failureIssue = mkOption {
-      type = types.bool;
-      default = true;
-      description = ''
-        Open an issue when a scheduled scan fails and close it when one passes again. A failed
-        scheduled run notifies nobody by itself.
-      '';
     };
   };
 

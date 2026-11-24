@@ -218,13 +218,13 @@ in {
         assert lib.hasPrefix "access-tokens = github.com=\${{ steps.app-token.outputs.token }}\n" scanStep.env.NIX_CONFIG;
         assert lib.hasInfix "accept-flake-config = false" scanStep.env.NIX_CONFIG;
         assert (lib.last full.jobs.staleness.steps)."with".nixpkgs-keys == "nixpkgs,nixpkgs-small";
-        assert full.jobs.report.needs == ["scan" "staleness"];
-        assert full.jobs.report.permissions == {issues = "write";};
+        # Findings are reported by the failed run alone; nothing is written to the forge.
+        assert builtins.attrNames full.jobs == ["scan" "staleness"];
+        assert builtins.attrNames quick.jobs == ["lockfiles"];
         assert quick.on.pull_request == {};
         assert quick.on.schedule == [{cron = "11 */4 * * *";}];
         assert lib.hasInfix "for target in api host; do" quickStep.run;
         assert quickStep.env == {inherit (scanStep.env) NIX_CONFIG;};
-        assert quick.jobs.report.needs == ["lockfiles"];
           pkgs.runCommandLocal "vuln-workflow" {} "touch $out";
 
       # flakeCheck.matrix replaces flake-check with an eval job and one build job per check.
