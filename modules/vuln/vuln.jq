@@ -19,11 +19,20 @@ def series_fixes($installed):
   ($installed | kernel_release) as $have
   | if $have then map(select(kernel_release | . != null and .series == $have.series and .patch > $have.patch)) else . end;
 
+# The fixed versions one vulnxscan observation lists. Alpine sometimes fixes a CVE by patching its own
+# build, "3.5.9-r1" for upstream 3.5.9. No upstream release carries that fix, so no update brings
+# it and it does not count.
+def observed_fixes:
+  . as $o
+  | .fix_versions
+  | split(", ")[]
+  | select(. != "" and ($o.scanner != "alpine" or sub("-r[0-9]+$"; "") != $o.version));
+
 # One finding per vulnxscan finding that no nixpkgs patch resolves. Only grype's observations, from
 # NVD ("grype") and from the Alpine pass ("alpine"), say whether a fixed version exists, so what
 # vulnix or OSV alone report never blocks.
 def vulnxscan_findings:
-  (.observations | map(select(.fix_state == "fixed")) | group_by(.finding_id) | map({key: .[0].finding_id, value: (map(.fix_versions | split(", ")[] | select(. != "")) | unique)}) | from_entries) as $fixes
+  (.observations | map(select(.fix_state == "fixed")) | group_by(.finding_id) | map({key: .[0].finding_id, value: (map(observed_fixes) | unique)}) | from_entries) as $fixes
   | .findings[]
   | select(.suppressed_by_patch_evidence | not)
   | .version as $version

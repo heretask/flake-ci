@@ -68,21 +68,27 @@
         (evidenceFinding "f3" "CVE-2026-10" "krb5" "1.22.2" "7.1" ["alpine"] false)
         (evidenceFinding "f4" "CVE-2026-11" "krb5" "1.22.2" "8.1" ["alpine"] true)
         (evidenceFinding "f5" "CVE-2026-12" "zlib" "1.3.2" "" ["vulnix"] false)
+        (evidenceFinding "f6" "CVE-2026-13" "openssl" "3.5.9" "7.5" ["alpine"] false)
+        (evidenceFinding "f7" "CVE-2026-14" "openssl" "3.5.9" "7.5" ["alpine" "grype"] false)
       ];
       observations = [
-        (observation "f1" "grype" "fixed" "6.12.114, 6.18.70, 7.2.6, 7.3")
-        (observation "f2" "grype" "fixed" "6.6.160, 6.18.64, 6.18, 7.2.6")
-        (observation "f2" "vulnix" null null)
-        (observation "f3" "alpine" "fixed" "1.22.3-r0")
-        (observation "f4" "alpine" "fixed" "1.22.3-r0")
-        (observation "f5" "vulnix" null null)
+        (observation "f1" "grype" "6.18.64" "fixed" "6.12.114, 6.18.70, 7.2.6, 7.3")
+        (observation "f2" "grype" "6.18.64" "fixed" "6.6.160, 6.18.64, 6.18, 7.2.6")
+        (observation "f2" "vulnix" "6.18.64" null null)
+        (observation "f3" "alpine" "1.22.2" "fixed" "1.22.3-r0")
+        (observation "f4" "alpine" "1.22.2" "fixed" "1.22.3-r0")
+        (observation "f5" "vulnix" "1.3.2" null null)
+        # Alpine patched its own 3.5.9 build; only NVD names an upstream release.
+        (observation "f6" "alpine" "3.5.9" "fixed" "3.5.9-r1")
+        (observation "f7" "alpine" "3.5.9" "fixed" "3.5.9-r1")
+        (observation "f7" "grype" "3.5.9" "fixed" "3.5.10")
       ];
     };
     evidenceFinding = finding_id: vuln_id: package: version: severity: scanners: suppressed_by_patch_evidence: {
       inherit finding_id vuln_id package version severity scanners suppressed_by_patch_evidence;
     };
-    observation = finding_id: scanner: fix_state: fix_versions:
-      {inherit finding_id scanner;} // lib.optionalAttrs (fix_state != null) {inherit fix_state fix_versions;};
+    observation = finding_id: scanner: version: fix_state: fix_versions:
+      {inherit finding_id scanner version;} // lib.optionalAttrs (fix_state != null) {inherit fix_state fix_versions;};
     # A grype match, cut down to the fields vuln.jq reads.
     grypeMatch = id: severity: versions: artifact: {
       vulnerability = {
@@ -173,8 +179,9 @@
       assert !(empty.packages.${system} ? vuln);
         pkgs.runCommandLocal "vuln-merge" {} "touch $out";
 
-      # The kernel counts as fixed only by a later release of its own series. A finding a nixpkgs
-      # patch resolves is dropped, and one without a grype observation has no fixed version.
+      # The kernel counts as fixed only by a later release of its own series, and Alpine's patch of
+      # its own build is no fixed version. A finding a nixpkgs patch resolves is dropped, and one
+      # without a grype observation has no fixed version.
       vuln-vulnxscan-findings = render "vulnxscan-findings" {
         filter = "[vulnxscan_findings]";
         input = json "evidence" evidence;
@@ -183,6 +190,8 @@
           (finding "closure" "CVE-2026-21" "linux" "6.18.64" "Critical" [] // {sources = ["grype" "vulnix"];})
           (finding "closure" "CVE-2026-10" "krb5" "1.22.2" "High" ["1.22.3-r0"] // {sources = ["alpine"];})
           (finding "closure" "CVE-2026-12" "zlib" "1.3.2" "Unknown" [] // {sources = ["vulnix"];})
+          (finding "closure" "CVE-2026-13" "openssl" "3.5.9" "High" [] // {sources = ["alpine"];})
+          (finding "closure" "CVE-2026-14" "openssl" "3.5.9" "High" ["3.5.10"] // {sources = ["alpine" "grype"];})
         ];
       };
 
