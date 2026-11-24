@@ -46,8 +46,12 @@
         github = {
           # Magic Nix Cache gets throttled by the Actions cache rate limit and then builds cold.
           cache = "hestia";
-          # Run the flake check on same-repo PR heads and publish `signoff` on success.
-          flakeCheck.pullRequests.enable = true;
+          flakeCheck = {
+            # /nix gets its own volume over the runner's free disk instead of the root filesystem.
+            reclaimDisk = "nothing-but-nix";
+            # Run the flake check on same-repo PR heads and publish `signoff` on success.
+            pullRequests.enable = true;
+          };
           inputUpdates = {
             nixpkgs.schedule = "17 4 * * 1";
             nixpkgs-vuln.schedule = "47 4 * * 1";

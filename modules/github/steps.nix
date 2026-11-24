@@ -109,6 +109,14 @@ in {
     '';
   };
 
+  # Mounts /nix on a btrfs volume over the free disk, then grows it as Carve's background purge
+  # frees toolchains. Must run before Nix is installed. Carve keeps Docker and apt packages.
+  nothingButNix = {
+    name = "Make room for Nix (nothing-but-nix v12)";
+    uses = "wimpysworld/nothing-but-nix@b2574ec1cf1462bee0a34de0fb6ff11ad3c43cb2"; # v12
+    "with".hatchet-protocol = "carve";
+  };
+
   # Flake config from the checkout is never trusted in CI.
   nixRun = "nix run --option accept-flake-config false";
   flakeCheck = "nix flake check -L --option accept-flake-config false";
