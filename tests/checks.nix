@@ -141,6 +141,7 @@ in {
         flakeCheck = plain.nix-check.jobs.flake-check;
         uses = prefix: builtins.any (step: lib.hasPrefix prefix (step.uses or "")) flakeCheck.steps;
         checkStep = lib.findFirst (step: (step.name or null) == "Check flake") {} flakeCheck.steps;
+        gcRun = cfg: (lib.last (import ../modules/github/workflows.nix {inherit cfg commits lib;}).hestia-gc.jobs.gc.steps).run;
       in
         assert github.cache == "hestia";
         assert uses "Mic92/hestia@";
@@ -149,6 +150,8 @@ in {
         assert (checkStep.timeout-minutes or null) == github.flakeCheck.timeoutMinutes - 10;
         assert github.workflows ? hestia-gc;
         assert (github.workflows.hestia-gc.jobs.gc.permissions.actions or null) == "write";
+        assert lib.hasInfix " gc --push-ttl 3 " (gcRun github);
+        assert !(lib.hasInfix "--push-ttl" (gcRun (github // {hestiaGc.pushTtlDays = null;})));
           pkgs.runCommandLocal "hestia-cache" {} "touch $out";
 
       # flakeCheck.matrix replaces flake-check with an eval job and one build job per check.

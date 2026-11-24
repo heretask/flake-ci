@@ -7,6 +7,7 @@
   steps = import ./steps.nix {inherit (cfg) extraNixConfig;};
   inherit (steps) flakeCheck flakeCheckNoBuild nixBuild nixRun;
   hestiaCache = cfg.cache == "hestia";
+  gcPushTtl = lib.optionalString (cfg.hestiaGc.pushTtlDays != null) " --push-ttl ${toString cfg.hestiaGc.pushTtlDays}";
   cacheStep =
     if hestiaCache
     then steps.hestia
@@ -377,7 +378,7 @@ in
           (steps.hestia // {"with" = {inherit (steps.hestia."with") version;};})
           {
             name = "Run garbage collection";
-            run = "\"$HESTIA_BIN\" gc \${{ inputs.dry-run && '--dry-run' || '' }}";
+            run = "\"$HESTIA_BIN\" gc${gcPushTtl} \${{ inputs.dry-run && '--dry-run' || '' }}";
             env.GITHUB_TOKEN = "\${{ github.token }}";
           }
         ];
