@@ -70,7 +70,12 @@
               ({
                   name = "Scan target";
                   env = scanEnv // {TARGET = "\${{ matrix.target }}";};
-                  run = ''nix run .#vuln -- "$TARGET"'';
+                  # grype unpacks its database under ~/.cache, on the root disk. nothing-but-nix leaves
+                  # about 3 GB free there, too little for it, and points TMPDIR at the Nix volume.
+                  run = ''
+                    export GRYPE_DB_CACHE_DIR="''${TMPDIR:-$RUNNER_TEMP}/grype-db"
+                    nix run .#vuln -- "$TARGET"
+                  '';
                 }
                 # hestia uploads for up to 300 s after the step; keep that inside the job timeout.
                 // lib.optionalAttrs hestiaCache {timeout-minutes = cfg.timeoutMinutes - 10;})

@@ -212,6 +212,8 @@ in {
         # hestia's post step uploads after the scan; the App token must exist before Nix fetches inputs.
         assert scanStep.timeout-minutes == 80;
         assert scan.permissions.actions == "read";
+        # The database must not land on the root disk that nothing-but-nix leaves nearly full.
+        assert lib.hasInfix "export GRYPE_DB_CACHE_DIR=\"\${TMPDIR:-$RUNNER_TEMP}/grype-db\"\n" scanStep.run;
         assert index "Create input App token" scan < index "Install Determinate Nix" scan;
         assert index "Make room for Nix" scan < index "Install Determinate Nix" scan;
         assert (stepNamed "Create input App token" scan)."with".repositories == "platform,other";
