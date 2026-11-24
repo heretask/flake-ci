@@ -24,6 +24,27 @@
   scanEnv.NIX_CONFIG =
     lib.optionalString (cfg.inputToken != null) "access-tokens = github.com=\${{ steps.app-token.outputs.token }}\n"
     + "accept-flake-config = false\n";
+  # scan <out> <vuln argument>...: one scan, its summary on the run page, its exit code in `status`.
+  scanFunction = ''
+    scan() {
+      status=0
+      nix run .#vuln -- "''${@:2}" --out "$1" || status=$?
+      if [[ -f $1/summary.md ]]; then
+        cat "$1/summary.md" >>"$GITHUB_STEP_SUMMARY"
+      fi
+    }
+  '';
+  # Also after a failed scan: the findings are why it failed.
+  uploadFindings = name: path:
+    steps.uploadArtifact
+    // {
+      name = "Upload findings (v7.0.2)";
+      "if" = "\${{ !cancelled() }}";
+      "with" = {
+        inherit name path;
+        if-no-files-found = "ignore";
+      };
+    };
   concurrency = {
     group = "\${{ github.workflow }}-\${{ github.event.pull_request.number || github.ref }}";
     cancel-in-progress = "\${{ github.event_name == 'pull_request' }}";
@@ -72,13 +93,17 @@
                   env = scanEnv // {TARGET = "\${{ matrix.target }}";};
                   # grype unpacks its database under ~/.cache, on the root disk. nothing-but-nix leaves
                   # about 3 GB free there, too little for it, and points TMPDIR at the Nix volume.
-                  run = ''
-                    export GRYPE_DB_CACHE_DIR="''${TMPDIR:-$RUNNER_TEMP}/grype-db"
-                    nix run .#vuln -- "$TARGET"
-                  '';
+                  run =
+                    scanFunction
+                    + ''
+                      export GRYPE_DB_CACHE_DIR="''${TMPDIR:-$RUNNER_TEMP}/grype-db"
+                      scan "$RUNNER_TEMP/vuln" "$TARGET"
+                      exit "$status"
+                    '';
                 }
                 # hestia uploads for up to 300 s after the step; keep that inside the job timeout.
                 // lib.optionalAttrs hestiaCache {timeout-minutes = cfg.timeoutMinutes - 10;})
+              (uploadFindings "vuln-\${{ matrix.target }}" "\${{ runner.temp }}/vuln/findings.json")
             ];
         };
       }
@@ -128,14 +153,20 @@
               name = "Scan lockfiles";
               env = scanEnv;
               # Every target, so one finding does not hide another target's.
-              run = ''
-                rc=0
-                for target in ${lib.escapeShellArgs targets}; do
-                  nix run .#vuln -- "$target" --quick || rc=1
-                done
-                exit "$rc"
-              '';
+              run =
+                scanFunction
+                + ''
+                  rc=0
+                  for target in ${lib.escapeShellArgs targets}; do
+                    scan "$RUNNER_TEMP/vuln/$target" "$target" --quick
+                    if ((status > rc)); then
+                      rc=$status
+                    fi
+                  done
+                  exit "$rc"
+                '';
             }
+            (uploadFindings "vuln-quick" "\${{ runner.temp }}/vuln/*/findings.json")
           ];
       };
     };

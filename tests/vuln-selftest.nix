@@ -104,25 +104,32 @@ in {
             fi
           done
 
-          jq -L ${../modules/vuln} 'include "vuln"; alpine' "$work/sbom.json" >"$work/alpine.json"
+          # Each scanner as vuln.sh runs it, read through the same filters.
+          findings() { jq -L ${../modules/vuln} "include \"vuln\"; $1" "''${@:2}"; }
+          findings alpine "$work/sbom.json" >"$work/alpine.json"
           for sbom in sbom alpine; do
-            grype "sbom:$work/$sbom.json" --only-fixed -o json >"$work/$sbom.grype.json"
+            grype "sbom:$work/$sbom.json" -o json >"$work/grype.json"
+            findings 'grype_findings("closure")' -c "$work/grype.json" >>"$work/grype.jsonl"
           done
-          if ! jq -e -s 'any(.[].matches[]; .vulnerability.id == "CVE-2026-123007" and .artifact.name == "nginx" and (.artifact.version | startswith("1.30.4")))' "$work"/*.grype.json >/dev/null; then
-            echo "FAIL: grype does not report CVE-2026-123007 (NGINX2Shell) for nginx 1.30.4" >&2
+          if ! jq -e -s 'any(.[]; .id == "CVE-2026-123007" and .package == "nginx" and .version == "1.30.4" and .fixedIn != [])' "$work/grype.jsonl" >/dev/null; then
+            echo "FAIL: no fixed CVE-2026-123007 (NGINX2Shell) finding for nginx 1.30.4 in grype's output" >&2
+            rc=1
+          fi
+          # A fix counts for the kernel only in the installed release series.
+          if ! jq -e -s 'map(select(.package == "linux")) | length > 0 and all(.[]; .version as $v | all(.fixedIn[]; split(".")[:2] == ($v | split(".")[:2])))' "$work/grype.jsonl" >/dev/null; then
+            echo "FAIL: no kernel findings in grype's output, or one counts a fix from another release series" >&2
             rc=1
           fi
 
-          # The sboms lane, as vuln.sh runs it.
           cp ${sbomCanary} "$work/canary.cdx.json"
-          osv-scanner scan source --format json --lockfile="$work/canary.cdx.json" >"$work/canary.osv.json" || true
-          if ! jq -e 'any(.results[]?.packages[]?; .package.name == "assent" and any(.groups[]; (.ids + .aliases) | index("EEF-CVE-2026-117656")))' "$work/canary.osv.json" >/dev/null; then
-            echo "FAIL: osv-scanner does not report EEF-CVE-2026-117656 for pkg:hex/assent@0.2.13 in a CycloneDX file" >&2
+          osv-scanner scan source --format json --lockfile="$work/canary.cdx.json" >"$work/osv.json" || true
+          if ! findings '[osv_findings("sbom")]' "$work/osv.json" | jq -e 'any(.[]; .package == "assent" and ([.id] + .aliases | index("EEF-CVE-2026-117656")) and .fixedIn != [])' >/dev/null; then
+            echo "FAIL: no EEF-CVE-2026-117656 finding with a fixed version for pkg:hex/assent@0.2.13 in osv-scanner's output" >&2
             rc=1
           fi
 
           if ((rc == 0)); then
-            echo "vuln-selftest: sbomnix CPEs, grype NGINX2Shell detection and osv-scanner CycloneDX detection OK"
+            echo "vuln-selftest: sbomnix CPEs, grype NGINX2Shell and kernel findings, and osv-scanner CycloneDX findings OK"
           fi
           exit "$rc"
         '';

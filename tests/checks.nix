@@ -220,8 +220,14 @@ in {
         assert lib.hasPrefix "access-tokens = github.com=\${{ steps.app-token.outputs.token }}\n" scanStep.env.NIX_CONFIG;
         assert lib.hasInfix "accept-flake-config = false" scanStep.env.NIX_CONFIG;
         assert (lib.last full.jobs.staleness.steps)."with".nixpkgs-keys == "nixpkgs,nixpkgs-small";
-        # Findings are reported by the failed run alone; nothing is written to the forge.
+        # Findings are reported by the failed run, its summary and its artifact; nothing else is written to the forge.
         assert builtins.attrNames full.jobs == ["scan" "staleness"];
+        assert lib.hasInfix "scan \"$RUNNER_TEMP/vuln\" \"$TARGET\"\nexit \"$status\"\n" scanStep.run;
+        assert lib.hasInfix ">>\"$GITHUB_STEP_SUMMARY\"" scanStep.run;
+        assert (lib.last scan.steps)."if" == "\${{ !cancelled() }}";
+        assert (lib.last scan.steps)."with".path == "\${{ runner.temp }}/vuln/findings.json";
+        assert lib.hasInfix "scan \"$RUNNER_TEMP/vuln/$target\" \"$target\" --quick\n" quickStep.run;
+        assert (lib.last quick.jobs.lockfiles.steps)."with".name == "vuln-quick";
         assert builtins.attrNames quick.jobs == ["lockfiles"];
         assert quick.on.pull_request == {};
         assert quick.on.schedule == [{cron = "11 */4 * * *";}];
