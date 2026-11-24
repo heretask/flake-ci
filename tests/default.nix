@@ -45,6 +45,27 @@
           pullRequests.enable = true;
         };
         ci.signoff.skipChecks = ["commitlint"];
+        perSystem = {pkgs, ...}: {
+          ci.vuln.targets = {
+            api.lockfiles = ["/src/api/mix.lock"];
+            host.closures = [pkgs.hello];
+          };
+        };
+        # All differ from their defaults so the fixture-vuln-workflow check can tell them apart.
+        ci.github.vuln = {
+          enable = true;
+          schedule = "7 6 * * *";
+          fullScanPaths = ["flake.lock" "modules/**"];
+          quick.schedule = "11 */4 * * *";
+          nixpkgsKeys = ["nixpkgs" "nixpkgs-small"];
+          timeoutMinutes = 90;
+          nothingButNix = true;
+          inputToken = {
+            clientIdVariable = "SCAN_APP_CLIENT_ID";
+            privateKeySecret = "SCAN_APP_PRIVATE_KEY";
+            repositories = ["platform" "other"];
+          };
+        };
         # Exercise the non-default cache here; flake-ci's own generated workflows cover the default.
         ci.github.cache = "hestia";
         ci.github.hestiaGc.pushTtlDays = 3;
@@ -92,7 +113,7 @@
       assert !(plainConsumer ? prChecks);
       assert !(unfilteredPrConsumer ? prChecks);
         lib.mapAttrs' (name: lib.nameValuePair "fixture-${name}") (
-          lib.getAttrs ["commitlint" "release-lifecycle" "release-version" "workflow-behavior" "actionlint" "workflow-orphans" "flake-check-job" "flake-check-disabled" "matrix-job" "flake-check-pr" "signoff-pr" "flake-ci-groups" "hestia-cache" "input-update-token"] allChecks
+          lib.getAttrs ["commitlint" "release-lifecycle" "release-version" "workflow-behavior" "actionlint" "workflow-orphans" "flake-check-job" "flake-check-disabled" "matrix-job" "flake-check-pr" "signoff-pr" "flake-ci-groups" "hestia-cache" "input-update-token" "vuln-workflow"] allChecks
         );
   };
 }

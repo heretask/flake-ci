@@ -8,7 +8,7 @@ A [flake-parts](https://flake.parts) module for repository automation, configure
   One `Release` run prepares `main` (the release App pushes the `VERSION`/`CHANGELOG.md` commit itself, so it must be allowed to bypass the rules on `main`), waits for the flake check on that commit unless `skip_ci` is set, then tags and moves the channel. `release stable` needs no RC: it tags any prepared commit, whether or not an RC points at it.
 - **GitHub workflows**: PR-title lint, flake check on `main`, optional macOS check, scheduled flake-input update PRs, and release workflows, rendered into `.github/workflows`.
 - **Nix formatting**: alejandra, statix, and deadnix through [treefmt-nix](https://github.com/numtide/treefmt-nix).
-- **Vulnerability scanning**: `nix run .#vuln -- <target>` scans runtime closures, release directories, and lockfiles with pinned sbomnix, grype, and osv-scanner. Also available alone as `flakeModules.vuln`. See [Vulnerability scanning](#vulnerability-scanning).
+- **Vulnerability scanning**: `nix run .#vuln -- <target>` scans runtime closures, release directories, and lockfiles with pinned sbomnix, grype, and osv-scanner. `ci.github.vuln` generates the workflows that run it on a schedule and on changes. Also available alone as `flakeModules.vuln`. See [Vulnerability scanning](#vulnerability-scanning).
 
 Generated files (workflows, `cog.toml`) are committed and written by [mightyiam/files](https://github.com/mightyiam/files): `nix run .#write-files` regenerates them, and each has a `files:<path>` check that fails when it is stale. A check depends only on its own committed file and what generates it, so a binary cache skips it on commits that touch neither. `checks.workflow-orphans` fails on workflow files that no `ci.github.workflows` entry owns.
 
@@ -189,6 +189,34 @@ perSystem = {system, ...}: {
 ```
 
 The scanners come from flake-ci's own `nixpkgs-vuln` input, not from the `nixpkgs` a consumer makes flake-ci follow. sbomnix before 1.9.0 labels the kernel, glibc, and curl with CPE vendors NVD does not use, which hides every finding for them. `nix` comes from `PATH`.
+
+### Scan workflows
+
+`ci.github.vuln.enable` generates the workflows that run the scan, so every declared target is scanned without listing it again:
+
+```nix
+ci.github.vuln = {
+  enable = true;
+  fullScanPaths = ["flake.lock" "modules/**"];   # default: ["flake.lock"]
+  quick.schedule = "11 */4 * * *";               # default: null
+  nixpkgsKeys = ["nixpkgs" "nixpkgs-small"];     # default: ["nixpkgs"]
+  inputToken = {                                 # only for private flake inputs
+    clientIdVariable = "AUTOMATION_APP_CLIENT_ID";
+    privateKeySecret = "AUTOMATION_PRIVATE_KEY";
+    repositories = ["platform"];
+  };
+};
+```
+
+| Workflow | Runs | When |
+| --- | --- | --- |
+| `vuln.yaml` | `vuln <target>`, one job per target | `schedule` (daily by default), manual dispatch, and pull requests and pushes to `main` that change a `fullScanPaths` path |
+| `vuln.yaml` | flake-checker on `nixpkgsKeys` | the schedule and manual dispatch |
+| `vuln-quick.yaml` | `vuln <target> --quick` for every target in one job | every pull request (`quick.pullRequests`), and `quick.schedule` when set |
+
+A scan result changes when an advisory is published and when what you ship changes. The schedule covers the first. `fullScanPaths` covers the second: list the paths that decide what a target ships, so a change is scanned when it is made. The grype database is rebuilt about once a day, so a full scan more often than daily finds little; osv.dev lists advisories within the hour, which is what `quick.schedule` is for.
+
+A scheduled failure opens an issue titled `Vulnerability scan failed` (`Vulnerability scan failed (lockfiles)` for the quick scan) and the next scheduled pass closes it; turn that off with `failureIssue = false`. The workflow's matrix holds the target names of `ci.github.vuln.system` (`x86_64-linux`), so adding a target changes the workflow file: run `nix run .#write-files`. `runner`, `timeoutMinutes` (60) and `nothingButNix` size the full-scan jobs, which use `ci.github.cache`.
 
 ## Development
 
