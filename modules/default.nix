@@ -7,6 +7,7 @@
     ./files.nix
     ./commits
     ./github
+    ./github/vuln.nix
     ./nix-format.nix
     ./release
     ./signoff

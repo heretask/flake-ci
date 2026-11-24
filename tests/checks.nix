@@ -187,6 +187,46 @@ in {
         assert !(lib.hasInfix "--push-ttl" (gcRun (github // {hestiaGc.pushTtlDays = null;})));
           pkgs.runCommandLocal "hestia-cache" {} "touch $out";
 
+      # ci.github.vuln scans every declared target: all in the matrix, all in the lockfile loop.
+      vuln-workflow = let
+        full = github.workflows.vuln;
+        quick = github.workflows.vuln-quick;
+        inherit (full.jobs) scan;
+        stepNamed = prefix: job: lib.findFirst (step: lib.hasPrefix prefix (step.name or "")) {} job.steps;
+        scanStep = stepNamed "Scan target" scan;
+        quickStep = stepNamed "Scan lockfiles" quick.jobs.lockfiles;
+        names = job: map (step: step.name or null) job.steps;
+        index = prefix: job: lib.lists.findFirstIndex (lib.hasPrefix prefix) null (names job);
+      in
+        assert scan.strategy.matrix.target == ["api" "host"];
+        assert !scan.strategy.fail-fast;
+        assert full.on.schedule == [{cron = "7 6 * * *";}];
+        assert full.on.push
+        == {
+          branches = ["main"];
+          paths = ["flake.lock" "modules/**"];
+        };
+        assert full.on.pull_request.paths == ["flake.lock" "modules/**"];
+        assert full.permissions == {};
+        assert scan.timeout-minutes == 90;
+        # hestia's post step uploads after the scan; the App token must exist before Nix fetches inputs.
+        assert scanStep.timeout-minutes == 80;
+        assert scan.permissions.actions == "read";
+        assert index "Create input App token" scan < index "Install Determinate Nix" scan;
+        assert index "Make room for Nix" scan < index "Install Determinate Nix" scan;
+        assert (stepNamed "Create input App token" scan)."with".repositories == "platform,other";
+        assert lib.hasPrefix "access-tokens = github.com=\${{ steps.app-token.outputs.token }}\n" scanStep.env.NIX_CONFIG;
+        assert lib.hasInfix "accept-flake-config = false" scanStep.env.NIX_CONFIG;
+        assert (lib.last full.jobs.staleness.steps)."with".nixpkgs-keys == "nixpkgs,nixpkgs-small";
+        # Findings are reported by the failed run alone; nothing is written to the forge.
+        assert builtins.attrNames full.jobs == ["scan" "staleness"];
+        assert builtins.attrNames quick.jobs == ["lockfiles"];
+        assert quick.on.pull_request == {};
+        assert quick.on.schedule == [{cron = "11 */4 * * *";}];
+        assert lib.hasInfix "for target in api host; do" quickStep.run;
+        assert quickStep.env == {inherit (scanStep.env) NIX_CONFIG;};
+          pkgs.runCommandLocal "vuln-workflow" {} "touch $out";
+
       # flakeCheck.matrix replaces flake-check with an eval job and one build job per check.
       matrix-job = let
         nixCheck = github.workflows.nix-check;
