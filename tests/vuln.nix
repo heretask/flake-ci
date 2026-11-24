@@ -44,6 +44,7 @@
       perSystem = {pkgs, ...}: {
         ci.vuln.targets.api = {
           dirs = [pkgs.hello];
+          sboms = [pkgs.hello];
           lockfiles = ["/src/api/mix.lock"];
           accepts = [accept];
         };
@@ -122,6 +123,7 @@
       == {
         closures = ["${pkgs.jq.drvPath}^bin"];
         dirs = ["${pkgs.hello.drvPath}^out"];
+        sboms = ["${pkgs.hello.drvPath}^out"];
         lockfiles = ["/src/api/mix.lock"];
         accepts = [accept];
       };

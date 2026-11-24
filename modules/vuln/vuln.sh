@@ -26,6 +26,15 @@ if ((${#lockfiles[@]})); then
 fi
 [[ $quick == --quick ]] && exit "$rc"
 
+mapfile -t sboms < <(jq -r '.sboms[]' <<<"$manifest")
+for i in "${!sboms[@]}"; do
+  out=$(realise "${sboms[i]}")
+  echo "vuln: sbom $out" >&2
+  # osv-scanner picks the parser by file name.
+  cp "$out" "$work/sbom-$i.cdx.json"
+  osv-scanner scan source --config "$work/osv.toml" --lockfile="$work/sbom-$i.cdx.json" || rc=1
+done
+
 # Findings without an upstream fix are listed, most at risk first, and never fail the scan.
 grype_scan() {
   grype "$1" --config "$2" --fail-on high --only-fixed || rc=1

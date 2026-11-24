@@ -19,6 +19,7 @@
     options = {
       closures = list installable "Runtime closures, scanned through an sbomnix SBOM with grype, once as Nix packages and once as Alpine packages.";
       dirs = list installable "Outputs scanned with `grype dir:`, e.g. a Mix release for Erlang/OTP and Elixir.";
+      sboms = list installable "CycloneDX JSON files, scanned with osv-scanner: packages that no scanner finds in the built output, e.g. the Hex packages in a Mix release.";
       lockfiles = list types.str ''Lockfiles scanned with osv-scanner, as strings so the file name survives, e.g. "''${self}/api/mix.lock".'';
       accepts = list (types.submodule {
         options = {
