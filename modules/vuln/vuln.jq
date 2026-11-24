@@ -1,29 +1,9 @@
-# Scanner inputs, the findings read from scanner output, and what blocks. vuln.sh, tests/vuln.nix
-# and the self-test include it.
-
-# sbomnix records the CVEs a nixpkgs patch resolves. They are fixed in that build only, so each rule
-# names the component's version, and the `-r0` version the Alpine projection gives it.
-def patched_rules:
-  [
-    (.metadata.component, .components[])
-    | .name as $name
-    | .version as $version
-    | .pedigree.patches[]?.resolves[]?.id
-    | {vulnerability: ., package: {name: $name, version: ($version, "\($version)-r0")}, reason: "patched in nixpkgs"}
-  ]
-  | unique;
-
-# grype matches apk packages against the Alpine secdb, which can list a fix before NVD has a CPE.
-# syft takes the version from `.version`, not the purl, so both carry the `-r0` release.
-def alpine:
-  (.metadata.component, .components[]) |= (
-    del(.cpe)
-    | if (.version // "") != "" then .version += "-r0" | .purl = "pkg:apk/alpine/\(.name)@\(.version)?distro=alpine-3.24" else . end
-  );
+# The findings read from scanner output, and what blocks. vuln.sh, tests/vuln.nix and the self-test
+# include it.
 
 def severity_rank: {Critical: 4, High: 3, Medium: 2, Low: 1}[.] // 0;
 
-# osv-scanner gives a CVSS score; the labels are grype's.
+# vulnxscan and osv-scanner give a CVSS score; the labels are grype's.
 def cvss_label:
   (tonumber? // 0) as $score
   | if $score >= 9 then "Critical" elif $score >= 7 then "High" elif $score >= 4 then "Medium" elif $score > 0 then "Low" else "Unknown" end;
@@ -39,22 +19,41 @@ def series_fixes($installed):
   ($installed | kernel_release) as $have
   | if $have then map(select(kernel_release | . != null and .series == $have.series and .patch > $have.patch)) else . end;
 
-# One finding per grype match. `fixedIn` is empty unless grype knows a fixed version.
-def grype_findings($lane):
+# One finding per vulnxscan finding that no nixpkgs patch resolves. Only grype's observations, from
+# NVD ("grype") and from the Alpine pass ("alpine"), say whether a fixed version exists, so what
+# vulnix or OSV alone report never blocks.
+def vulnxscan_findings:
+  (.observations | map(select(.fix_state == "fixed")) | group_by(.finding_id) | map({key: .[0].finding_id, value: (map(.fix_versions | split(", ")[] | select(. != "")) | unique)}) | from_entries) as $fixes
+  | .findings[]
+  | select(.suppressed_by_patch_evidence | not)
+  | .version as $version
+  | ($fixes[.finding_id] // []) as $fixed
+  | {
+      lane: "closure",
+      id: .vuln_id,
+      aliases: [],
+      ecosystem: "nix",
+      package,
+      version,
+      severity: (.severity | cvss_label),
+      fixedIn: (if .package == "linux" then $fixed | series_fixes($version) else $fixed end),
+      sources: .scanners
+    };
+
+# One finding per grype match in a directory. `fixedIn` is empty unless grype knows a fixed version.
+def grype_findings:
   .matches[]
   | .artifact as $a
   | .vulnerability as $v
-  | (if $v.fix.state == "fixed" then $v.fix.versions else [] end) as $fixes
   | {
-      lane: $lane,
+      lane: "dir",
       id: $v.id,
       aliases: ([.relatedVulnerabilities[]?.id] | unique - [$v.id]),
-      # Both passes over a closure describe the Nix package, so the Alpine pass loses its `-r0`.
-      ecosystem: (if $lane == "closure" then "nix" else $a.type end),
+      ecosystem: $a.type,
       package: $a.name,
-      version: (if $lane == "closure" and $a.type == "apk" then $a.version | sub("-r0$"; "") else $a.version end),
+      version: $a.version,
       severity: $v.severity,
-      fixedIn: (if any($a.cpes[]?; startswith("cpe:2.3:o:linux:linux_kernel:")) then $fixes | series_fixes($a.version) else $fixes end),
+      fixedIn: (if $v.fix.state == "fixed" then $v.fix.versions else [] end),
       sources: [$v.namespace]
     };
 
@@ -77,7 +76,7 @@ def osv_findings($lane):
       sources: ["osv"]
     };
 
-# A package both passes over a closure report, or two closures ship, is one finding.
+# A package two closures ship is one finding.
 def merged:
   group_by([.lane, .ecosystem, .package, .version, .id])
   | map(

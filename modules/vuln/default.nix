@@ -17,7 +17,7 @@
     };
   target = types.submodule {
     options = {
-      closures = list installable "Runtime closures, scanned through an sbomnix SBOM with grype, once as Nix packages and once as Alpine packages.";
+      closures = list installable "Runtime closures, scanned with vulnxscan: grype against NVD and against Alpine's security database, vulnix and OSV.";
       dirs = list installable "Outputs scanned with `grype dir:`, e.g. a Mix release for Erlang/OTP and Elixir.";
       sboms = list installable "CycloneDX JSON files, scanned with osv-scanner: packages that no scanner finds in the built output, e.g. the Hex packages in a Mix release.";
       lockfiles = list types.str ''Lockfiles scanned with osv-scanner, as strings so the file name survives, e.g. "''${self}/api/mix.lock".'';
@@ -53,9 +53,10 @@ in {
     ...
   }: let
     tools = localInputs.nixpkgs-vuln.legacyPackages.${system};
+    sbomnix = import ./sbomnix.nix tools;
     vuln = pkgs.writeShellApplication {
       name = "vuln";
-      runtimeInputs = [tools.grype tools.jq tools.osv-scanner tools.sbomnix];
+      runtimeInputs = [tools.grype tools.jq tools.osv-scanner sbomnix];
       text = ''
         system=${system}
         vuln_jq=${./.}

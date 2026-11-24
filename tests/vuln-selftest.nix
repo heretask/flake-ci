@@ -57,6 +57,7 @@ in {
     ...
   }: let
     tools = inputs.nixpkgs-vuln.legacyPackages.${system};
+    sbomnix = import ../modules/vuln/sbomnix.nix tools;
     # nginx 1.30.4 is affected by NGINX2Shell (CVE-2026-123007); the others carry the CPE vendors
     # sbomnix 1.8.0 got wrong, which hid every kernel, glibc and curl finding.
     canary = tools.writeText "vuln-canary" ''
@@ -88,7 +89,7 @@ in {
     packages = lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
       vuln-selftest = pkgs.writeShellApplication {
         name = "vuln-selftest";
-        runtimeInputs = [tools.grype tools.jq tools.osv-scanner tools.sbomnix];
+        runtimeInputs = [tools.jq tools.osv-scanner sbomnix];
         text = ''
           work=$(mktemp -d)
           trap 'rm -rf "$work"' EXIT
@@ -106,18 +107,23 @@ in {
 
           # Each scanner as vuln.sh runs it, read through the same filters.
           findings() { jq -L ${../modules/vuln} "include \"vuln\"; $1" "''${@:2}"; }
-          findings alpine "$work/sbom.json" >"$work/alpine.json"
-          for sbom in sbom alpine; do
-            grype "sbom:$work/$sbom.json" -o json >"$work/grype.json"
-            findings 'grype_findings("closure")' -c "$work/grype.json" >>"$work/grype.jsonl"
-          done
-          if ! jq -e -s 'any(.[]; .id == "CVE-2026-123007" and .package == "nginx" and .version == "1.30.4" and .fixedIn != [])' "$work/grype.jsonl" >/dev/null; then
-            echo "FAIL: no fixed CVE-2026-123007 (NGINX2Shell) finding for nginx 1.30.4 in grype's output" >&2
+          vulnxscan ${canaryDrv} --buildtime --alpine 3.24 --out "$work/vulns.csv" --evidence-out "$work/evidence.json" 2>"$work/vulnxscan.log" || {
+            tail -n 20 "$work/vulnxscan.log" >&2
+            exit 1
+          }
+          findings '[vulnxscan_findings]' "$work/evidence.json" >"$work/closure.json"
+          if ! jq -e 'any(.[]; .id == "CVE-2026-123007" and .package == "nginx" and .version == "1.30.4" and .fixedIn != [])' "$work/closure.json" >/dev/null; then
+            echo "FAIL: no fixed CVE-2026-123007 (NGINX2Shell) finding for nginx 1.30.4 in vulnxscan's output" >&2
             rc=1
           fi
           # A fix counts for the kernel only in the installed release series.
-          if ! jq -e -s 'map(select(.package == "linux")) | length > 0 and all(.[]; .version as $v | all(.fixedIn[]; split(".")[:2] == ($v | split(".")[:2])))' "$work/grype.jsonl" >/dev/null; then
-            echo "FAIL: no kernel findings in grype's output, or one counts a fix from another release series" >&2
+          if ! jq -e 'map(select(.package == "linux")) | length > 0 and all(.[]; .version as $v | all(.fixedIn[]; split(".")[:2] == ($v | split(".")[:2])))' "$work/closure.json" >/dev/null; then
+            echo "FAIL: no kernel findings in vulnxscan's output, or one counts a fix from another release series" >&2
+            rc=1
+          fi
+          # The Alpine pass ran, and its findings carry the scanned package's version, not Alpine's.
+          if ! jq -e 'map(select(.sources | index("alpine"))) | length > 0 and all(.[]; .version | endswith("-r0") | not)' "$work/closure.json" >/dev/null; then
+            echo "FAIL: no findings from vulnxscan's Alpine pass, or one keeps the projected -r0 version" >&2
             rc=1
           fi
 
@@ -129,7 +135,7 @@ in {
           fi
 
           if ((rc == 0)); then
-            echo "vuln-selftest: sbomnix CPEs, grype NGINX2Shell and kernel findings, and osv-scanner CycloneDX findings OK"
+            echo "vuln-selftest: sbomnix CPEs, vulnxscan NGINX2Shell, kernel and Alpine findings, and osv-scanner CycloneDX findings OK"
           fi
           exit "$rc"
         '';

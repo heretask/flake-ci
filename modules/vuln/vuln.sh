@@ -51,16 +51,8 @@ osv() {
   fi
 }
 
-# grype_scan <lane> <what> <input> [config]
-grype_scan() {
-  local status=0
-  grype "$3" ${4:+--config "$4"} -o json >"$work/scan.json" || status=$?
-  if ((status)); then
-    problem "$2: grype exited $status"
-  else
-    render "grype_findings(\"$1\")" -c "$work/scan.json" >>"$work/findings.jsonl"
-  fi
-}
+# The Alpine release whose security database vulnxscan's second grype pass matches against.
+alpine_release=3.24
 
 if ! manifest=$(nix eval --json ".#vuln.$system.\"$target\""); then
   problem "target $target: evaluation failed"
@@ -93,16 +85,14 @@ if [[ $mode == full ]]; then
       continue
     fi
     echo "vuln: closure $out" >&2
-    sbom=$work/closure-$i.cdx.json
-    if ! sbomnix "$out" --cdx "$sbom" --csv /dev/null --spdx /dev/null >&2; then
-      problem "closure $out: sbomnix failed"
+    # Its log ends in a table of every finding; the summary below replaces that.
+    if ! vulnxscan "$out" --alpine "$alpine_release" --out "$work/vulns.csv" --evidence-out "$work/scan.json" 2>"$work/vulnxscan.log"; then
+      tail -n 20 "$work/vulnxscan.log" >&2
+      problem "closure $out: vulnxscan failed"
       continue
     fi
-    render '{ignore: patched_rules}' "$sbom" >"$work/closure-$i.yaml"
-    grype_scan closure "closure $out" "sbom:$sbom" "$work/closure-$i.yaml"
-    echo "vuln: closure $out (Alpine secdb)" >&2
-    render alpine "$sbom" >"$work/closure-$i.alpine.cdx.json"
-    grype_scan closure "closure $out (Alpine secdb)" "sbom:$work/closure-$i.alpine.cdx.json" "$work/closure-$i.yaml"
+    grep -E '^(WARNING|ERROR)' "$work/vulnxscan.log" >&2 || true
+    render vulnxscan_findings -c "$work/scan.json" >>"$work/findings.jsonl"
   done
 
   mapfile -t dirs < <(jq -r '.dirs[]' <<<"$manifest")
@@ -112,7 +102,13 @@ if [[ $mode == full ]]; then
       continue
     fi
     echo "vuln: dir $out" >&2
-    grype_scan dir "dir $out" "dir:$out"
+    status=0
+    grype "dir:$out" -o json >"$work/scan.json" || status=$?
+    if ((status)); then
+      problem "dir $out: grype exited $status"
+    else
+      render grype_findings -c "$work/scan.json" >>"$work/findings.jsonl"
+    fi
   done
 fi
 

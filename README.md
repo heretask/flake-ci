@@ -8,7 +8,7 @@ A [flake-parts](https://flake.parts) module for repository automation, configure
   One `Release` run prepares `main` (the release App pushes the `VERSION`/`CHANGELOG.md` commit itself, so it must be allowed to bypass the rules on `main`), waits for the flake check on that commit unless `skip_ci` is set, then tags and moves the channel. `release stable` needs no RC: it tags any prepared commit, whether or not an RC points at it.
 - **GitHub workflows**: PR-title lint, flake check on `main`, optional macOS check, scheduled flake-input update PRs, and release workflows, rendered into `.github/workflows`.
 - **Nix formatting**: alejandra, statix, and deadnix through [treefmt-nix](https://github.com/numtide/treefmt-nix).
-- **Vulnerability scanning**: `nix run .#vuln -- <target>` scans runtime closures, release directories, and lockfiles with pinned sbomnix, grype, and osv-scanner, and reports what it finds as a summary and as JSON. `ci.github.vuln` generates the workflows that run it on a schedule and on changes. Also available alone as `flakeModules.vuln`. See [Vulnerability scanning](#vulnerability-scanning).
+- **Vulnerability scanning**: `nix run .#vuln -- <target>` scans runtime closures, release directories, and lockfiles with pinned vulnxscan (sbomnix, grype, vulnix), grype, and osv-scanner, and reports what it finds as a summary and as JSON. `ci.github.vuln` generates the workflows that run it on a schedule and on changes. Also available alone as `flakeModules.vuln`. See [Vulnerability scanning](#vulnerability-scanning).
 
 Generated files (workflows, `cog.toml`) are committed and written by [mightyiam/files](https://github.com/mightyiam/files): `nix run .#write-files` regenerates them, and each has a `files:<path>` check that fails when it is stale. A check depends only on its own committed file and what generates it, so a binary cache skips it on commits that touch neither. `checks.workflow-orphans` fails on workflow files that no `ci.github.workflows` entry owns.
 
@@ -147,7 +147,7 @@ Declare targets under `perSystem`. Every field is a list, defaulting to `[]`:
 ```nix
 perSystem = {config, ...}: {
   ci.vuln.targets.api = {
-    closures = [config.packages.server];       # runtime closure: sbomnix SBOM, then grype
+    closures = [config.packages.server];       # runtime closure: vulnxscan              
     dirs = [config.packages.api];              # grype dir:, e.g. Erlang/OTP and Elixir in a Mix release
     sboms = [config.packages.api-sbom];        # CycloneDX JSON file you build; osv-scanner
     lockfiles = ["${self}/api/mix.lock"];      # osv-scanner; a string, so the file name survives
@@ -176,11 +176,12 @@ perSystem = {config, ...}: {
 | --- | --- | --- |
 | `lockfiles` | `osv-scanner scan source` | any finding not accepted |
 | `sboms` | `osv-scanner scan source` on each file | any finding not accepted |
-| `closures` | sbomnix CycloneDX SBOM, then `grype sbom:` | a fixed high or critical finding |
-| `closures`, Alpine pass | the same SBOM with each versioned package relabelled `pkg:apk/alpine/<name>@<version>-r0`, then `grype sbom:` | a fixed high or critical finding |
+| `closures` | `vulnxscan --alpine` from sbomnix: an SBOM of the closure, then grype against NVD, grype against Alpine's security database, vulnix, and OSV | a high or critical finding for which grype knows a fixed version |
 | `dirs` | `grype dir:` | a fixed high or critical finding |
 
-Findings that do not block are counted in the summary and listed in `findings.json`; accept one or patch the package yourself. The Alpine pass matches packages against Alpine's security database, which often lists a fix before NVD gives it a CPE. A CVE that a nixpkgs patch resolves (sbomnix records it in `pedigree`) is ignored for that package name and version only. An accept names an ID or any of its aliases, and `package` limits it to one package, in every lane. It stops applying after its `until` date, so the finding blocks again.
+Findings that do not block are counted in the summary and listed in `findings.json`; accept one or patch the package yourself. vulnxscan merges its scanners into one finding per CVE and package, and drops a CVE that a nixpkgs patch of that package names. Only grype says whether a fixed version exists, so a finding that only vulnix or OSV reports is listed and never blocks.
+
+The Alpine pass treats each package as the Alpine package of the same name and version. Alpine's security database often lists a fixed version while NVD is still analysing the CVE, which grype's NVD matching cannot see. The match is by name, so a blocking finding from `alpine` alone is a reason to look, not proof; accept it when it is wrong. `--alpine` is a patch flake-ci carries on sbomnix (`modules/vuln/vulnxscan-alpine.patch`). An accept names an ID or any of its aliases, and `package` limits it to one package, in every lane. It stops applying after its `until` date, so the finding blocks again.
 
 A kernel advisory lists a fixed version for each release series. For the Linux kernel, only a later release of the installed series counts: on 6.18.64, a fix in 6.18.70 blocks, and one that exists only in 6.12.114 and 7.2.6 does not, because no update within 6.18 brings it. Every other package counts any fixed version.
 
@@ -213,7 +214,7 @@ A kernel advisory lists a fixed version for each release series. For the Linux k
 }
 ```
 
-`mode` is `full` or `quick`, and `lane` is `closure`, `dir`, `sbom` or `lockfile`. `severity` uses grype's labels, onto which osv-scanner's CVSS score is mapped. `fixedIn` is empty when no fixed version counts. `sources` names the databases: grype namespaces such as `nvd:cpe` and `alpine:distro:alpine:3.24`, or `osv`. A package that both closure passes report is one finding. An accept's `state` is `live`, `expiring` (within 14 days) or `expired`. `errors` lists what failed when `complete` is false.
+`mode` is `full` or `quick`, and `lane` is `closure`, `dir`, `sbom` or `lockfile`. `severity` uses grype's labels, onto which osv-scanner's CVSS score is mapped. `fixedIn` is empty when no fixed version counts. `sources` names who reported it: vulnxscan's scanners in the closure lane (`grype`, `alpine`, `vulnix`, `osv`), a grype namespace in the `dir` lane, and `osv` in the other two. An accept's `state` is `live`, `expiring` (within 14 days) or `expired`. `errors` lists what failed when `complete` is false.
 
 Use `sboms` for packages the other lanes cannot see in what you ship. grype has no Hex advisories, for example, so `grype dir:` on a Mix release covers only Erlang/OTP and Elixir; a derivation that lists the release's Hex packages as `pkg:hex/<name>@<version>` components closes that gap, and reads the versions from the build instead of a lockfile. Each entry is a derivation whose output is one CycloneDX JSON file. A file without components leaves the scan incomplete.
 
@@ -228,7 +229,7 @@ perSystem = {system, ...}: {
 };
 ```
 
-The scanners come from flake-ci's own `nixpkgs-vuln` input, not from the `nixpkgs` a consumer makes flake-ci follow. sbomnix before 1.9.0 labels the kernel, glibc, and curl with CPE vendors NVD does not use, which hides every finding for them. `nix` comes from `PATH`.
+The scanners come from flake-ci's own `nixpkgs-vuln` input, not from the `nixpkgs` a consumer makes flake-ci follow. vulnix downloads the NVD feeds to `~/.cache/vulnix`, about 420 MB, on its first run. sbomnix before 1.9.0 labels the kernel, glibc, and curl with CPE vendors NVD does not use, which hides every finding for them. `nix` comes from `PATH`.
 
 ### Scan workflows
 
@@ -262,4 +263,4 @@ A blocking finding or an incomplete scan fails the run, scheduled or not. Each s
 
 `nix flake check` runs the tool self-tests against a fixture consumer (`tests/`) plus this repository's own generated files and formatting.
 
-`nix run .#vuln-selftest` (Linux) checks the pinned scanners against the live grype database: sbomnix must label the kernel `o:linux:linux_kernel`, glibc `gnu:glibc` and curl `haxx:curl`, grype must report NGINX2Shell (CVE-2026-123007) for nginx 1.30.4 with a fixed version and kernel findings with none from another release series, and osv-scanner must report EEF-CVE-2026-117656 for assent 0.2.13 in a CycloneDX file. It reads each scanner's JSON through the filters `vuln` uses, so a scanner update that changes that output fails here. It reads the build graph of a canary derivation, so it downloads only the grype database and queries osv.dev. The `vuln-selftest` workflow runs it weekly and on PRs that touch `flake.lock` or the scanner, and fails when `nixpkgs` or `nixpkgs-vuln` is locked to a revision older than 30 days. `nixpkgs` and `nixpkgs-vuln` get weekly update PRs.
+`nix run .#vuln-selftest` (Linux) checks the pinned scanners against the live grype database: sbomnix must label the kernel `o:linux:linux_kernel`, glibc `gnu:glibc` and curl `haxx:curl`, vulnxscan must report NGINX2Shell (CVE-2026-123007) for nginx 1.30.4 with a fixed version, kernel findings with none from another release series and findings from its Alpine pass, and osv-scanner must report EEF-CVE-2026-117656 for assent 0.2.13 in a CycloneDX file. It reads each scanner's JSON through the filters `vuln` uses, so a scanner update that changes that output fails here. It reads the build graph of a canary derivation, so it builds nothing: it downloads the grype database and the NVD feeds and queries osv.dev. It also builds the patched sbomnix, so a `nixpkgs-vuln` update the patch no longer applies to fails here. The `vuln-selftest` workflow runs it weekly and on PRs that touch `flake.lock` or the scanner, and fails when `nixpkgs` or `nixpkgs-vuln` is locked to a revision older than 30 days. `nixpkgs` and `nixpkgs-vuln` get weekly update PRs.
