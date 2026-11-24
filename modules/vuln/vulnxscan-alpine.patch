@@ -1,0 +1,186 @@
+diff --git a/src/vulnxscan/reporting.py b/src/vulnxscan/reporting.py
+index a6bca2d..ebd8e6f 100644
+--- a/src/vulnxscan/reporting.py
++++ b/src/vulnxscan/reporting.py
+@@ -33,9 +33,11 @@ _VERSION_DISPLAY_COLUMNS = (
+ _CONSOLE_HIDDEN_COLUMNS = (cols.SORTCOL, *EVIDENCE_REPORT_COLUMNS)
+ 
+ 
+-def scanner_columns(df_vulnix, df_osv):
++def scanner_columns(df_vulnix, df_osv, df_alpine=None):
+     """Return scanner presence columns for the current scan mode."""
+     scanners = ["grype"]
++    if df_alpine is not None:
++        scanners.append("alpine")
+     if df_osv is not None:
+         scanners.append("osv")
+     if df_vulnix is not None:
+diff --git a/src/vulnxscan/sarif.py b/src/vulnxscan/sarif.py
+index cb66db0..4e948ea 100644
+--- a/src/vulnxscan/sarif.py
++++ b/src/vulnxscan/sarif.py
+@@ -22,7 +22,7 @@ from vulnxscan.evidence import finding_id, package_finding_id
+ 
+ _SCHEMA = "https://json.schemastore.org/sarif-2.1.0.json"
+ _INFORMATION_URI = "https://github.com/tiiuae/sbomnix"
+-_SCANNERS = ("grype", "osv", "vulnix")
++_SCANNERS = ("grype", "alpine", "osv", "vulnix")
+ _CVE_ID_RE = re.compile(r"CVE-\d{4}-\d{4,19}", re.IGNORECASE)
+ 
+ 
+diff --git a/src/vulnxscan/scanners.py b/src/vulnxscan/scanners.py
+index fe1c4b2..a6fb473 100644
+--- a/src/vulnxscan/scanners.py
++++ b/src/vulnxscan/scanners.py
+@@ -6,10 +6,15 @@
+ 
+ """Scanner command execution helpers for vulnxscan."""
+ 
++import json
++
+ from common.log import LOG, LOG_VERBOSE
+ from common.proc import exec_cmd
+ from vulnxscan.osv_client import OSV
+ 
++# Package release the projection gives every component: the first of its version.
++ALPINE_RELEASE_SUFFIX = "-r0"
++
+ 
+ def run_vulnix_scan(target_path, buildtime=False, *, exec_cmd_fn=exec_cmd, log=LOG):
+     """Run vulnix and return its process result."""
+@@ -33,6 +38,34 @@ def run_grype_scan(sbom_path, *, exec_cmd_fn=exec_cmd, log=LOG):
+     return exec_cmd_fn(cmd)
+ 
+ 
++def write_alpine_projection(sbom_path, out_path, release):
++    """Write the SBOM with each versioned component relabelled as an apk
++    package of the given Alpine release.
++
++    grype then matches the components against Alpine's security database,
++    which often lists a fixed version before NVD has analysed the CVE. The
++    match is by package name only, so it is a second opinion, not proof.
++    """
++    with open(sbom_path, encoding="utf-8") as infile:
++        sbom = json.load(infile)
++    components = list(sbom.get("components", []))
++    root = sbom.get("metadata", {}).get("component")
++    if isinstance(root, dict):
++        components.append(root)
++    for component in components:
++        component.pop("cpe", None)
++        name = component.get("name")
++        version = component.get("version")
++        if not name or not version:
++            continue
++        component["version"] = f"{version}{ALPINE_RELEASE_SUFFIX}"
++        component["purl"] = (
++            f"pkg:apk/alpine/{name}@{component['version']}?distro=alpine-{release}"
++        )
++    with open(out_path, "w", encoding="utf-8") as outfile:
++        json.dump(sbom, outfile)
++
++
+ def run_osv_scan(sbom_path, *, osv_factory=OSV, log=LOG):
+     """Run OSV queries for the given CycloneDX SBOM path."""
+     log.log(LOG_VERBOSE, "Running OSV scan")
+diff --git a/src/vulnxscan/vulnscan.py b/src/vulnxscan/vulnscan.py
+index fd8ea43..a0d1cdb 100644
+--- a/src/vulnxscan/vulnscan.py
++++ b/src/vulnxscan/vulnscan.py
+@@ -9,6 +9,9 @@ VulnScan abstracts over querying and collecting vulnerability information
+ from grype, vulnix, and osv databases
+ """
+ 
++import pathlib
++import tempfile
++
+ import pandas as pd
+ from requests import RequestException
+ 
+@@ -36,6 +39,7 @@ class VulnScan:
+     def __init__(self):
+         self.df_vulnix = None
+         self.df_grype = None
++        self.df_alpine = None
+         self.df_osv = None
+         self.df_report = None
+         self.df_triaged = None
+@@ -91,6 +95,36 @@ class VulnScan:
+         if ret.stdout:
+             self._parse_grype(ret.stdout)
+ 
++    def scan_alpine(self, sbom_path, release):
++        """Run grype with the SBOM's components projected onto an Alpine release"""
++        with tempfile.TemporaryDirectory(prefix="vulnxscan_alpine_") as tmpdir:
++            projected = pathlib.Path(tmpdir) / "sbom.cdx.json"
++            vulnxscan_scanners.write_alpine_projection(sbom_path, projected, release)
++            ret = vulnxscan_scanners.run_grype_scan(
++                projected.as_posix(),
++                exec_cmd_fn=exec_cmd,
++                log=LOG,
++            )
++        self.df_alpine = pd.DataFrame()
++        if not ret.stdout:
++            return
++        # Not cvss_cache: Alpine's score must not replace the one NVD gives.
++        df_alpine = vulnxscan_parsers.parse_grype_json(
++            ret.stdout,
++            log=LOG,
++            log_spam=LOG_SPAM,
++        )
++        if df_alpine.empty:
++            return
++        # The findings are about the scanned package, so they carry its version.
++        df_alpine[cols.VERSION] = df_alpine[cols.VERSION].str.removesuffix(
++            vulnxscan_scanners.ALPINE_RELEASE_SUFFIX
++        )
++        df_alpine[cols.SCANNER] = "alpine"
++        self.df_alpine = df_alpine
++        if is_debug_enabled():
++            df_to_csv_file(self.df_alpine, "df_alpine.csv")
++
+     def _parse_osv(self, df_osv):
+         self.df_osv = vulnxscan_parsers.normalize_osv_dataframe(
+             df_osv,
+@@ -109,11 +143,12 @@ class VulnScan:
+ 
+     def _generate_report(self, sbom_csv=None):
+         result = build_evidence_report(
+-            [self.df_vulnix, self.df_grype, self.df_osv],
++            [self.df_vulnix, self.df_grype, self.df_alpine, self.df_osv],
+             sbom_csv=sbom_csv,
+             scanner_columns=vulnxscan_reporting.scanner_columns(
+                 df_vulnix=self.df_vulnix,
+                 df_osv=self.df_osv,
++                df_alpine=self.df_alpine,
+             ),
+             log=LOG,
+         )
+diff --git a/src/vulnxscan/vulnxscan_cli.py b/src/vulnxscan/vulnxscan_cli.py
+index 1ea866d..4820d0e 100755
+--- a/src/vulnxscan/vulnxscan_cli.py
++++ b/src/vulnxscan/vulnxscan_cli.py
+@@ -71,6 +71,14 @@ def getargs(args=None):
+         "ignored since target packages will be read from the given SBOM."
+     )
+     parser.add_argument("--sbom", help=helps, action="store_true")
++    helps = (
++        "Also match the components against the security database of the given "
++        "Alpine release (e.g. 3.24), as if each were the Alpine package of the "
++        "same name and version. Alpine often lists a fixed version before NVD "
++        "has analysed a CVE. Matching is by package name, so treat the "
++        "findings as a second opinion."
++    )
++    parser.add_argument("--alpine", metavar="RELEASE", help=helps, type=str)
+     helps = (
+         "Path to whitelist file. Vulnerabilities that match any whitelisted "
+         "entries will not be included to the console output and are annotated "
+@@ -177,6 +185,8 @@ def _run(args):
+         if not args.sbom:
+             scanner.scan_vulnix(target_path, args.buildtime)
+         scanner.scan_grype(sbom_cdx_path)
++        if args.alpine:
++            scanner.scan_alpine(sbom_cdx_path, args.alpine)
+         if not args.skip_osv:
+             scanner.scan_osv(sbom_cdx_path)
+         scanner.report(args, sbom_csv_path)
