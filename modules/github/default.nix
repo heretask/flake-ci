@@ -170,6 +170,7 @@ in {
     ci.github.workflows = import ./workflows.nix {
       inherit cfg lib;
       inherit (config.ci) commits;
+      checkVersionInvariance = config.ci.release.enable && config.ci.release.checkVersionInvariance;
     };
 
     flake = lib.mkIf (cfg.flakeCheck.enable && cfg.flakeCheck.pullRequests.enable && cfg.flakeCheck.pullRequests.skipChecks != []) {

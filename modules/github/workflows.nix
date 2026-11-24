@@ -3,6 +3,7 @@
   cfg,
   commits,
   lib,
+  checkVersionInvariance ? false,
 }: let
   steps = import ./steps.nix {inherit (cfg) extraNixConfig;};
   inherit (steps) flakeCheck flakeCheckNoBuild nixBuild nixRun;
@@ -23,6 +24,10 @@
   evaluateFlake = timedStep flakeCheckTimeout {
     name = "Evaluate flake";
     run = flakeCheckNoBuild;
+  };
+  versionInvarianceStep = {
+    name = "Check VERSION invariance";
+    run = "${nixRun} .#release -- check-version-invariance";
   };
   hestiaJobPermissions = lib.optionalAttrs hestiaCache {
     permissions = {
@@ -89,8 +94,9 @@
           };
           steps =
             setupSteps
+            ++ [evaluateFlake]
+            ++ lib.optional checkVersionInvariance versionInvarianceStep
             ++ [
-              evaluateFlake
               # One system only: the runner cannot build other systems' checks, and hestia's
               # default runner map would send darwin checks to macOS runners.
               (steps.hestiaMatrix nixRun ".#${checkOutput}.x86_64-linux" cfg.flakeCheck.runner)
@@ -135,20 +141,22 @@
             setupSteps
             ++ (
               if filtered
-              then [
-                evaluateFlake
-                (timedStep flakeCheckTimeout {
-                  name = "Build PR checks";
-                  run = ''
-                    set -o pipefail
-                    system="$(nix eval --impure --raw --expr builtins.currentSystem)"
-                    nix eval --option accept-flake-config false --raw ".#${checkOutput}.$system" \
-                      --apply 'checks: builtins.concatStringsSep "\n" (map (check: check.drvPath + "^*") (builtins.attrValues checks))' |
-                      ${nixBuild} --no-link --stdin
-                  '';
-                })
-              ]
-              else [(checkFlake flakeCheckTimeout)]
+              then
+                [evaluateFlake]
+                ++ lib.optional checkVersionInvariance versionInvarianceStep
+                ++ [
+                  (timedStep flakeCheckTimeout {
+                    name = "Build PR checks";
+                    run = ''
+                      set -o pipefail
+                      system="$(nix eval --impure --raw --expr builtins.currentSystem)"
+                      nix eval --option accept-flake-config false --raw ".#${checkOutput}.$system" \
+                        --apply 'checks: builtins.concatStringsSep "\n" (map (check: check.drvPath + "^*") (builtins.attrValues checks))' |
+                        ${nixBuild} --no-link --stdin
+                    '';
+                  })
+                ]
+              else lib.optional checkVersionInvariance versionInvarianceStep ++ [(checkFlake flakeCheckTimeout)]
             );
         }
         // hestiaJobPermissions
