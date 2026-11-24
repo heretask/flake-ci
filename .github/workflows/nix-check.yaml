@@ -7,6 +7,9 @@ concurrency:
 jobs:
   flake-check:
     name: flake-check
+    permissions:
+      actions: read
+      contents: read
     runs-on: ubuntu-24.04
     steps:
     - name: Checkout (v7.0.1)
@@ -40,8 +43,11 @@ jobs:
         df -h /
     - name: Install Determinate Nix (v23)
       uses: DeterminateSystems/nix-installer-action@3138316df39ed29be04236d7ffc686fa525866aa
-    - name: Enable Magic Nix Cache (v15)
-      uses: DeterminateSystems/magic-nix-cache-action@84c0677f58dcedf3b91f8223ce36a9ea5b3c84b7
+    - name: Enable hestia cache (v3.1.0)
+      uses: Mic92/hestia@dfed9ced335d28978ba74e513939a10db1f71025
+      with:
+        upstream-cache-filter: 'true'
+        version: v3.1.0
     - env:
         HEAD_SHA: ${{ github.sha }}
       if: github.event_name == 'push'
@@ -51,6 +57,7 @@ jobs:
           nix run --option accept-flake-config false .#commitlint -- --squash-merged
     - name: Check flake
       run: nix flake check -L --option accept-flake-config false
+      timeout-minutes: 20
     timeout-minutes: 30
 name: Nix
 'on':
