@@ -58,14 +58,16 @@ in {
     };
 
     flakeCheck.reclaimDisk = mkOption {
-      type = types.enum ["foreground" "background"];
+      type = types.enum ["foreground" "background" "nothing-but-nix"];
       default = "foreground";
       example = "background";
       description = ''
         How the flake-check job frees preinstalled toolchains from the hosted runner's disk.
         `foreground` blocks for the removal (41-79 s measured on ubuntu-24.04). `background` starts
         it and moves on, so builds begin with the ~14 GB already free and get ~20 GB more within
-        about two minutes.
+        about two minutes. `nothing-but-nix` runs wimpysworld/nothing-but-nix with its Carve
+        protocol before Nix is installed: `/nix` moves to a btrfs volume of about 75 GiB at once,
+        which grows to about 105 GiB as the purge finishes in the background.
       '';
     };
 

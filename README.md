@@ -69,7 +69,7 @@ Then run `nix run .#write-files` and commit the generated files.
 | `ci.github.flakeCheck.pullRequests.skipChecks` | `ci.signoff.skipChecks` | Names of flake checks to omit from PR builds. Use `[]` for the full suite. |
 | `ci.github.flakeCheck.runner` | `ci.github.runner` | Runner for the flake-check job, e.g. a larger runner. |
 | `ci.github.flakeCheck.timeoutMinutes` | `30` | Timeout in minutes for the flake-check job. |
-| `ci.github.flakeCheck.reclaimDisk` | `"foreground"` | `"background"` frees preinstalled toolchains from the runner disk without blocking the flake-check job. See [Runner disk](#runner-disk). |
+| `ci.github.flakeCheck.reclaimDisk` | `"foreground"` | `"background"` frees preinstalled toolchains from the runner disk without blocking the flake-check job. `"nothing-but-nix"` gives `/nix` its own volume instead. See [Runner disk](#runner-disk). |
 | `ci.github.flakeCheck.queue` | `false` | `true` runs main's flake checks one at a time in push order. See [Queued checks](#queued-checks). |
 | `ci.github.flakeCheck.matrix` | `false` | `true` replaces the flake-check job with an eval job and one build job per uncached check. Needs `ci.github.cache = "hestia"`. See [Build matrix](#build-matrix). |
 | `ci.github.cache` | `"magic-nix-cache"` | Nix binary cache for flake-check jobs: `"magic-nix-cache"` or `"hestia"`. |
@@ -106,7 +106,7 @@ Hestia refuses to read a cache manifest that decodes to more than 256 MiB ([Mic9
 
 GitHub's `ubuntu-24.04` runner starts with about 14 GB free. The flake-check job removes GHC, Android and .NET first, which frees about 20 GB more but took 41-79 s in measured runs. With `ci.github.flakeCheck.reclaimDisk = "background";` the removal runs detached and the job moves straight on to installing Nix. Builds start on the 14 GB already free. In measured runs the removal finished 71-120 s later, while Nix installed, the flake evaluated and the first builds ran. Its output goes to `$RUNNER_TEMP/reclaim-disk.log`.
 
-[nothing-but-nix](https://github.com/wimpysworld/nothing-but-nix) mounts `/nix` on a btrfs volume carved from a separate `/mnt` disk. The 2-vCPU private-repository runners have no separate disk, so its `holster` mode leaves `/` with under 1 GB free and a 13 GB `/nix`, and its default `cleave` mode blocks for 45-63 s.
+With `ci.github.flakeCheck.reclaimDisk = "nothing-but-nix";` the job runs [nothing-but-nix](https://github.com/wimpysworld/nothing-but-nix) v12 with its Carve protocol before installing Nix. It mounts `/nix` on a btrfs volume made from the runner's free disk, about 75 GiB on public x64 runners within seconds, and grows it to about 105 GiB as it removes Rust, GHC, Android, .NET, Swift and the tool cache in the background. Carve keeps Docker and every apt package. Private-repository runners have smaller disks, so `/nix` gets less.
 
 ## Queued checks
 

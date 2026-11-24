@@ -36,10 +36,12 @@
       contents = "read";
     };
   };
-  reclaimStep =
-    if cfg.flakeCheck.reclaimDisk == "background"
-    then steps.reclaimDiskInBackground
-    else steps.reclaimDisk;
+  reclaimSteps = {
+    foreground = steps.reclaimDisk;
+    background = steps.reclaimDiskInBackground;
+    nothing-but-nix = steps.nothingButNix;
+  };
+  reclaimStep = reclaimSteps.${cfg.flakeCheck.reclaimDisk};
   lintCommit = {
     name = "Lint pushed commit";
     "if" = "github.event_name == 'push'";
