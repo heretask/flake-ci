@@ -241,8 +241,21 @@ in {
         evalJob = nixCheck.jobs.eval;
         buildJob = nixCheck.jobs.build;
         stepWith = prefix: job: lib.findFirst (step: lib.hasPrefix prefix (step.uses or "")) {} job.steps;
+        prebuild = lib.last evalJob.steps;
+        withoutPrebuild = import ../modules/github/workflows.nix {
+          cfg = github // {flakeCheck = github.flakeCheck // {prebuildShared = false;};};
+          inherit commits lib;
+        };
       in
         assert github.flakeCheck.matrix;
+        # prebuildShared builds after the matrix step, from its output, and is bounded like the other Nix steps.
+        assert github.flakeCheck.prebuildShared;
+        assert prebuild.name == "Build dependencies shared by build jobs";
+        assert prebuild.env.MATRIX == "\${{ steps.matrix.outputs.matrix }}";
+        assert prebuild."if" == "steps.matrix.outputs.any-jobs == 'true'";
+        assert prebuild.timeout-minutes == github.flakeCheck.timeoutMinutes - 10;
+        assert (lib.last github.workflows.nix-check-pr.jobs.eval.steps).name == prebuild.name;
+        assert (lib.last withoutPrebuild.nix-check.jobs.eval.steps).id == "matrix";
         assert !(nixCheck.jobs ? flake-check);
         assert (stepWith "Mic92/hestia/matrix@" evalJob) != {};
         # The evaluator is pinned by the consumer's lock, not by the runner's registry.
@@ -254,6 +267,63 @@ in {
         assert (stepWith "Mic92/hestia@" buildJob)."with".wait-manifest-version == "\${{ needs.eval.outputs.manifest-version }}";
         assert buildJob.permissions.actions == "read";
           pkgs.runCommandLocal "matrix-job" {} "touch $out";
+
+      # prebuild-shared.sh builds exactly the uncached derivations that two or more jobs need.
+      prebuild-shared = let
+        # nix-store --query --requisites <drv>...: the fixture closure of each job's derivations.
+        stubNixStore = pkgs.writeShellScriptBin "nix-store" ''
+          for drv in "''${@:3}"; do
+            echo "$drv"
+            case "$drv" in
+              */a.drv) printf '/nix/store/%s\n' shared.drv cached.drv only-a.drv same-job.drv source.tar.gz ;;
+              */a2.drv) printf '/nix/store/%s\n' shared.drv same-job.drv ;;
+              */b.drv) printf '/nix/store/%s\n' shared.drv cached.drv ;;
+              */c.drv) printf '/nix/store/%s\n' only-c.drv ;;
+            esac
+          done
+        '';
+        # nix build --dry-run --stdin: everything but cached.drv is missing from the caches.
+        stubNix = pkgs.writeShellScriptBin "nix" ''
+          cat >/dev/null
+          {
+            echo "these 8 derivations will be built:"
+            printf '  /nix/store/%s\n' a.drv a2.drv b.drv c.drv shared.drv only-a.drv only-c.drv same-job.drv
+            echo "these 2 paths will be fetched (1.0 MiB download, 2.0 MiB unpacked):"
+            printf '  /nix/store/%s\n' cached source.tar.gz
+          } >&2
+        '';
+        # Stands in for NIX_BUILD: records its arguments and the installables on stdin.
+        recordBuild = pkgs.writeShellScriptBin "record-build" ''
+          printf '%s\n' "$*" >"$TMPDIR/build-args"
+          cat >"$TMPDIR/built"
+          exit "''${BUILD_EXIT:-0}"
+        '';
+        matrix = jobs: builtins.toJSON {include = map (installables: {inherit installables;}) jobs;};
+        script = ../modules/github/prebuild-shared.sh;
+      in
+        pkgs.runCommandLocal "prebuild-shared" {
+          nativeBuildInputs = [pkgs.jq stubNix stubNixStore recordBuild];
+          threeJobs = matrix ["/nix/store/a.drv^* /nix/store/a2.drv^*" "/nix/store/b.drv^*" "/nix/store/c.drv^*"];
+          oneJob = matrix ["/nix/store/a.drv^* /nix/store/a2.drv^*"];
+        } ''
+          export NIX_BUILD=record-build
+
+          # 1. Only shared.drv: cached.drv is shared but cached, same-job.drv is needed twice by one job.
+          MATRIX="$threeJobs" bash -e ${script}
+          test "$(cat "$TMPDIR/built")" = '/nix/store/shared.drv^*'
+          test "$(cat "$TMPDIR/build-args")" = '--no-link --keep-going --stdin'
+
+          # 2. One job shares with nobody: nothing is built.
+          rm "$TMPDIR/built"
+          MATRIX="$oneJob" bash -e ${script}
+          test ! -e "$TMPDIR/built"
+
+          # 3. A failed build is a warning, not a failed step.
+          output="$(MATRIX="$threeJobs" BUILD_EXIT=1 bash -e ${script})"
+          grep -qF '::warning title=Shared dependencies::' <<<"$output"
+
+          touch "$out"
+        '';
 
       flake-check-pr = let
         matrixPR = github.workflows.nix-check-pr;
@@ -278,6 +348,7 @@ in {
         sameRepo = "github.event.pull_request.head.repo.full_name == github.repository";
         matrixPublish = matrixPR.jobs.publish;
         publish = builtins.head matrixPublish.steps;
+        matrixStep = job: lib.findFirst (step: (step.id or null) == "matrix") {} job.steps;
       in
         assert matrixPR.on.pull_request == {};
         assert matrixPR.concurrency
@@ -289,9 +360,9 @@ in {
         assert plainPR.jobs.flake-check."if" == sameRepo;
         assert (builtins.head matrixPR.jobs.eval.steps)."with".ref == head;
         assert (builtins.head plainPR.jobs.flake-check.steps)."with".ref == head;
-        assert (lib.last github.workflows.nix-check.jobs.eval.steps)."with".flake == ".#checks.x86_64-linux";
-        assert (lib.last matrixPR.jobs.eval.steps)."with".flake == ".#prChecks.x86_64-linux";
-        assert (lib.last unfilteredMatrixPR.jobs.eval.steps)."with".flake == ".#checks.x86_64-linux";
+        assert (matrixStep github.workflows.nix-check.jobs.eval)."with".flake == ".#checks.x86_64-linux";
+        assert (matrixStep matrixPR.jobs.eval)."with".flake == ".#prChecks.x86_64-linux";
+        assert (matrixStep unfilteredMatrixPR.jobs.eval)."with".flake == ".#checks.x86_64-linux";
         assert lib.hasInfix ''--raw ".#prChecks.$system"'' (lib.last plainPR.jobs.flake-check.steps).run;
         assert (lib.last unfilteredPlainPR.jobs.flake-check.steps).name == "Check flake";
         assert matrixPublish.needs == ["eval" "build"];

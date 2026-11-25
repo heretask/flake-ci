@@ -72,6 +72,7 @@ Then run `nix run .#write-files` and commit the generated files.
 | `ci.github.flakeCheck.reclaimDisk` | `"foreground"` | `"background"` frees preinstalled toolchains from the runner disk without blocking the flake-check job. `"nothing-but-nix"` gives `/nix` its own volume instead. See [Runner disk](#runner-disk). |
 | `ci.github.flakeCheck.queue` | `false` | `true` runs main's flake checks one at a time in push order. See [Queued checks](#queued-checks). |
 | `ci.github.flakeCheck.matrix` | `false` | `true` replaces the flake-check job with an eval job and one build job per uncached check. Needs `ci.github.cache = "hestia"`. See [Build matrix](#build-matrix). |
+| `ci.github.flakeCheck.prebuildShared` | `false` | `true` builds uncached derivations that several matrix jobs need once, in the `eval` job. Needs `flakeCheck.matrix`. See [Build matrix](#build-matrix). |
 | `ci.github.cache` | `"magic-nix-cache"` | Nix binary cache for flake-check jobs: `"magic-nix-cache"` or `"hestia"`. |
 | `ci.github.hestiaGc.pushTtlDays` | `null` | Days `hestia-gc` keeps a store path after its last push; `null` is hestia's default of 14. See [Hestia cache](#hestia-cache). |
 | `ci.github.darwinCheck` | `false` | Manually dispatched flake check on macOS. |
@@ -121,7 +122,9 @@ With `ci.github.flakeCheck.matrix = true;` (and `ci.github.cache = "hestia";`) t
 
 Checks with the same `meta.hestia.group` share one runner, and `meta.hestia.os` overrides a check's runner labels. flake-ci's own light checks (`workflow-orphans`, `actionlint`, `checks.treefmt`, and the `files:<path>` checks) use the group `"light"`; put your small checks in that group too.
 
-The matrix covers `.#checks.x86_64-linux` only: a Linux runner cannot build other systems' checks, and hestia's default runner map would send darwin checks to macOS runners. Uncached dependencies shared by several checks are built by each job that needs them. Hestia limits a matrix to 256 jobs. `nix-eval-jobs` comes from your flake's `nixpkgs` input at its locked revision; a flake without an input of that name gets it from the runner's nixpkgs registry.
+The matrix covers `.#checks.x86_64-linux` only: a Linux runner cannot build other systems' checks, and hestia's default runner map would send darwin checks to macOS runners. Hestia limits a matrix to 256 jobs. `nix-eval-jobs` comes from your flake's `nixpkgs` input at its locked revision; a flake without an input of that name gets it from the runner's nixpkgs registry.
+
+Each build job builds whatever its check needs that no cache has. When several checks depend on the same uncached derivation, for example a compile step that three test checks use, every one of those jobs builds its own copy. Set `ci.github.flakeCheck.prebuildShared = true;` to build such derivations once: after the matrix step, `eval` finds the uncached derivations in the closure of more than one job and builds them, and hestia uploads them when `eval` ends, before the build jobs start. `eval` takes longer by that build; each job that needed it gets shorter by the same build. A shared derivation that fails to build does not fail `eval`. The step warns, and the jobs that need the derivation build it themselves and report the failure.
 
 ## Run Nix on pull requests
 
