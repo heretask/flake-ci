@@ -129,6 +129,8 @@ Set `ci.github.flakeCheck.pullRequests.enable = true;` and run `nix run .#write-
 
 Nix PR checks start on open, reopen, and push for same-repository PRs, including upper layers of a stack. A push cancels the older run for that PR. Each run checks out the exact PR head and posts `signoff` on that commit after its checks pass. A new head needs its own result.
 
+The same run lints the PR title in its first job and posts the result as a `PR title lint` commit status on the head, so a push costs no separate lint job. The `PR title` workflow still starts on every PR event, but its job is skipped unless the title was edited or the PR comes from a fork; a skipped job is not billed and satisfies the required `PR title lint` check. GitHub requires both the check and the status of that name, so an invalid title blocks the merge either way. Editing the title reruns the lint and updates the status. An invalid title does not fail the Nix checks.
+
 `signoff` returns immediately if the tested commit already has a passing `signoff` status. If its Nix PR run is queued or running, the command prints the run URL and exits with status 75. Use `nix run .#signoff -- --local` to run the local suite immediately.
 
 PR builds use the local `ci.signoff.skipChecks` exclusions by default. Set `ci.github.flakeCheck.pullRequests.skipChecks` to override the PR suite. Hestia receives the selected check derivations, including their grouping and runner metadata. The workflow on `main` builds the full suite.

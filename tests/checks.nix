@@ -22,6 +22,29 @@ in {
     atLimit = "fix(api): ${description "x" commits.maxLength}";
     overLimit = "fix(api): ${description "x" (commits.maxLength + 1)}";
     valid = ["feat(app): validate commit messages" "revert: description" "chore(ci): pin actions" "docs(api)!: drop old guide" atLimit];
+    # The PR-title step of the generated workflows: check_title, then pr-title.sh.
+    titleLint = pkgs.writeShellScript "pr-title-lint" ''
+      ${commits.titleCheck}
+
+      ${builtins.readFile ../modules/github/pr-title.sh}
+    '';
+    # gh api .../pulls/<number> --jq .title prints LIVE_TITLE; a POST to .../statuses/<sha> is recorded.
+    stubTitleGh = pkgs.writeShellScriptBin "gh" ''
+      case "$*" in
+        *"/pulls/7 "*)
+          [[ -n "''${LIVE_TITLE-}" ]] || exit 1
+          printf '%s\n' "$LIVE_TITLE"
+          ;;
+        *"/statuses/abc123 "*)
+          printf '%s\n' "$@" >"$TMPDIR/status"
+          exit "''${POST_EXIT:-0}"
+          ;;
+        *)
+          echo "unexpected gh call: $*" >&2
+          exit 99
+          ;;
+      esac
+    '';
     invalid = {
       "not conventional" = ''missing ": " after the type'';
       "fix(api: unclosed" = ''is not "type", "type(scope)"'';
@@ -34,7 +57,7 @@ in {
     };
   in {
     checks = {
-      commitlint = pkgs.runCommandLocal "commitlint-check" {} ''
+      commitlint = pkgs.runCommandLocal "commitlint-check" {nativeBuildInputs = [stubTitleGh];} ''
         ${lib.concatMapStringsSep "\n" (title: ''
             printf '%s\n' ${lib.escapeShellArg title} | ${commitlint}
           '')
@@ -68,6 +91,40 @@ in {
         grep -q '^warning: ' warning
         if printf '%s\n' "not conventional (#1234)" | ${commitlint} --squash-merged; then
           echo "commitlint --squash-merged accepted an invalid subject" >&2
+          exit 1
+        fi
+
+        # The PR-title step. Without REPORT it only lints the event's title.
+        export GITHUB_REPOSITORY=example/app GITHUB_SERVER_URL=https://example.test GITHUB_RUN_ID=1
+        export PR_NUMBER=7 HEAD_SHA=abc123
+        PR_TITLE=${lib.escapeShellArg atLimit} ENFORCE=true ${titleLint}
+        if PR_TITLE="not conventional" ENFORCE=true ${titleLint} > output; then
+          echo "the PR-title step accepted an invalid title" >&2
+          exit 1
+        fi
+        grep -qF '::error title=Invalid PR title::"not conventional": missing' output
+        test ! -e "$TMPDIR/status"
+
+        # REPORT lints the title the pull request has now and posts it; only ENFORCE fails the step.
+        PR_TITLE="not conventional" LIVE_TITLE=${lib.escapeShellArg atLimit} REPORT=true ${titleLint}
+        grep -qx 'context=PR title lint' "$TMPDIR/status"
+        grep -qx 'state=success' "$TMPDIR/status"
+        grep -qx 'target_url=https://example.test/example/app/actions/runs/1' "$TMPDIR/status"
+        PR_TITLE=${lib.escapeShellArg atLimit} LIVE_TITLE=${lib.escapeShellArg overLimit} REPORT=true ${titleLint}
+        grep -qx 'state=failure' "$TMPDIR/status"
+        # GitHub rejects a status description over 140 characters.
+        test "$(grep '^description=' "$TMPDIR/status" | wc -m)" -eq "$((12 + 140 + 1))"
+        if PR_TITLE=${lib.escapeShellArg atLimit} LIVE_TITLE=${lib.escapeShellArg overLimit} REPORT=true ENFORCE=true ${titleLint}; then
+          echo "the PR-title step passed an invalid title with ENFORCE" >&2
+          exit 1
+        fi
+
+        # Without the pull request's current title, the event's is linted.
+        PR_TITLE="not conventional" REPORT=true ${titleLint}
+        grep -qx 'state=failure' "$TMPDIR/status"
+        # A status that cannot be posted fails the step: nothing else would report the title.
+        if PR_TITLE=${lib.escapeShellArg atLimit} REPORT=true POST_EXIT=1 ${titleLint}; then
+          echo "the PR-title step passed without posting its status" >&2
           exit 1
         fi
 
@@ -274,6 +331,13 @@ in {
           }).nix-check-pr;
         unfilteredMatrixPR = unfiltered true;
         unfilteredPlainPR = unfiltered false;
+        titleStep = builtins.elemAt matrixPR.jobs.eval.steps 1;
+        titleJob = github.workflows.pr-title.jobs.lint;
+        standaloneTitleJob =
+          (import ../modules/github/workflows.nix {
+            cfg = github // {flakeCheck = github.flakeCheck // {pullRequests = github.flakeCheck.pullRequests // {enable = false;};};};
+            inherit commits lib;
+          }).pr-title.jobs.lint;
         head = "\${{ github.event.pull_request.head.sha }}";
         sameRepo = "github.event.pull_request.head.repo.full_name == github.repository";
         matrixPublish = matrixPR.jobs.publish;
@@ -299,6 +363,34 @@ in {
         assert lib.hasInfix "needs.build.result == 'skipped' && needs.eval.outputs.any-jobs == 'false'" matrixPublish."if";
         assert plainPR.jobs.publish.needs == "flake-check";
         assert matrixPublish.permissions == {statuses = "write";};
+        # A pull request's check job lints the title right after checkout and posts the status itself.
+        assert map (job: (builtins.elemAt job.steps 1).name) [matrixPR.jobs.eval plainPR.jobs.flake-check] == ["Lint PR title" "Lint PR title"];
+        assert titleStep.env.REPORT == "true";
+        assert !(titleStep.env ? ENFORCE);
+        assert titleStep.env.HEAD_SHA == head;
+        assert matrixPR.jobs.eval.permissions
+        == {
+          actions = "read";
+          contents = "read";
+          pull-requests = "read";
+          statuses = "write";
+        };
+        assert !(matrixPR.jobs.build.permissions ? statuses);
+        assert !(builtins.elem "Lint PR title" (map (step: step.name or null) github.workflows.nix-check.jobs.eval.steps));
+        assert !(github.workflows.nix-check.jobs.eval.permissions ? statuses);
+        # The PR title workflow then runs for a changed title and for forks; other events skip the job.
+        assert titleJob."if" == "github.event.pull_request.head.repo.full_name != github.repository || (github.event.action == 'edited' && github.event.changes.title != null)";
+        assert titleJob.name == "PR title lint";
+        assert titleJob.permissions.statuses == "write";
+        assert (builtins.head titleJob.steps).env.REPORT == "\${{ ${sameRepo} }}";
+        assert (builtins.head titleJob.steps).env.ENFORCE == "true";
+        # Without Nix PR checks it lints every event itself and posts nothing.
+        assert !(standaloneTitleJob ? "if") && !(standaloneTitleJob ? permissions);
+        assert (builtins.head standaloneTitleJob.steps).env
+        == {
+          ENFORCE = "true";
+          PR_TITLE = "\${{ github.event.pull_request.title }}";
+        };
         assert publish.env.HEAD_SHA == head;
           pkgs.runCommandLocal "flake-check-pr" {} "touch $out";
 
