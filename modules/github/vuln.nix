@@ -50,6 +50,14 @@
     cancel-in-progress = "\${{ github.event_name == 'pull_request' }}";
   };
 
+  # A push to main is scanned only when a pull request did not already scan the same change.
+  skipScannedMerges = cfg.fullScanPaths != [];
+  # A null name omits the attribute.
+  whenSkipping = name:
+    if skipScannedMerges
+    then name
+    else null;
+
   full = {
     name = "Vulnerability scan";
     on =
@@ -70,6 +78,9 @@
       {
         scan = {
           name = "scan";
+          ${whenSkipping "needs"} = "merged";
+          # Also when `merged` was skipped or failed without an answer: only a found scan skips this one.
+          ${whenSkipping "if"} = "\${{ !cancelled() && needs.merged.outputs.scanned != 'true' }}";
           strategy = {
             fail-fast = false;
             matrix.target = targets;
@@ -105,6 +116,32 @@
                 // lib.optionalAttrs hestiaCache {timeout-minutes = cfg.timeoutMinutes - 10;})
               (uploadFindings "vuln-\${{ matrix.target }}" "\${{ runner.temp }}/vuln/findings.json")
             ];
+        };
+      }
+      // lib.optionalAttrs skipScannedMerges {
+        # One short job per push, instead of one full scan per target.
+        merged = {
+          name = "scanned on pull request";
+          "if" = "github.event_name == 'push'";
+          runs-on = github.runner;
+          timeout-minutes = 5;
+          permissions = {
+            actions = "read";
+            contents = "read";
+            pull-requests = "read";
+          };
+          outputs.scanned = "\${{ steps.scanned.outputs.scanned }}";
+          steps = [
+            {
+              id = "scanned";
+              name = "Find the merged pull request's scan";
+              env = {
+                GH_TOKEN = "\${{ github.token }}";
+                WORKFLOW = "vuln.yaml";
+              };
+              run = builtins.readFile ./scanned-merge.sh;
+            }
+          ];
         };
       }
       // lib.optionalAttrs (cfg.nixpkgsKeys != []) {
@@ -194,7 +231,8 @@ in {
       description = ''
         Paths that change what a target ships. A pull request or a push to `main` that touches one
         runs the full scan, so a change is scanned when it is made instead of at the next schedule.
-        `[]` leaves the full scan to the schedule.
+        A push that merged a pull request whose head was already scanned is not scanned again: a
+        one-minute job finds that run and takes its result. `[]` leaves the full scan to the schedule.
       '';
     };
 

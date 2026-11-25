@@ -255,10 +255,13 @@ ci.github.vuln = {
 | Workflow | Runs | When |
 | --- | --- | --- |
 | `vuln.yaml` | `vuln <target>`, one job per target | `schedule` (daily by default), manual dispatch, and pull requests and pushes to `main` that change a `fullScanPaths` path |
+| `vuln.yaml` | `scanned on pull request`, a one-minute lookup | pushes to `main` that change a `fullScanPaths` path |
 | `vuln.yaml` | flake-checker on `nixpkgsKeys` | the schedule and manual dispatch |
 | `vuln-quick.yaml` | `vuln <target> --quick` for every target in one job | every pull request (`quick.pullRequests`), and `quick.schedule` when set |
 
 A scan result changes when an advisory is published and when what you ship changes. The schedule covers the first. `fullScanPaths` covers the second: list the paths that decide what a target ships, so a change is scanned when it is made. The grype database is rebuilt about once a day, so a full scan more often than daily finds little; osv.dev lists advisories within the hour, which is what `quick.schedule` is for.
+
+A change that reaches `main` through a pull request is scanned once. The pull request scans it, and the push that merges it only looks that run up: if the merged pull request's head has a finished `vuln.yaml` run, the push skips its scan jobs and takes that run's result, passing if it passed and failing with a link to it if it failed. A direct push, a pull request whose scan was cancelled or never started (one opened with the workflow's own token starts no workflows), and a failed lookup are scanned as before. The pull request's run scanned the merge of its head into `main` as `main` was then; a later change to `main` is covered by its own scan and by the schedule.
 
 A blocking finding or an incomplete scan fails the run, scheduled or not. Each scan job shows the summary on the run page and uploads `findings.json` as an artifact, `vuln-<target>` or `vuln-quick`; the workflows write nothing else to the forge. The workflow's matrix holds the target names of `ci.github.vuln.system` (`x86_64-linux`), so adding a target changes the workflow file: run `nix run .#write-files`. `runner`, `timeoutMinutes` (60) and `nothingButNix` size the full-scan jobs, which use `ci.github.cache`.
 
