@@ -70,6 +70,8 @@
   # lints the title there and posts it as the `PR title lint` commit status. The PR title workflow
   # then only has to run when the title changes, and for forks, whose token cannot post a status.
   lintTitleInNixPr = cfg.flakeCheck.enable && cfg.flakeCheck.pullRequests.enable;
+  hasPathCheck = commits.nonShippedPaths != [];
+  minorTypes = builtins.attrNames (lib.filterAttrs (_: type: type.bump == "minor") commits.types);
   # `report` posts the commit status; `enforce` fails the step on an invalid title.
   lintTitle = {
     report,
@@ -80,13 +82,17 @@
       {PR_TITLE = "\${{ github.event.pull_request.title }}";}
       // lib.optionalAttrs (report != "false") {
         REPORT = report;
-        GH_TOKEN = "\${{ github.token }}";
         HEAD_SHA = prHead;
+      }
+      // lib.optionalAttrs (report != "false" || hasPathCheck) {
+        GH_TOKEN = "\${{ github.token }}";
         PR_NUMBER = "\${{ github.event.pull_request.number }}";
       }
       // lib.optionalAttrs enforce {ENFORCE = "true";};
     run = ''
       ${commits.titleCheck}
+      minor_types=(${lib.escapeShellArgs minorTypes})
+      non_shipped_paths=(${lib.escapeShellArgs commits.nonShippedPaths})
 
       ${builtins.readFile ./pr-title.sh}'';
   };
@@ -292,7 +298,9 @@ in
         "reopened"
         "synchronize"
       ];
-      permissions.contents = "read";
+      permissions =
+        {contents = "read";}
+        // lib.optionalAttrs (hasPathCheck && !lintTitleInNixPr) {pull-requests = "read";};
       jobs.lint =
         {
           name = "PR title lint";

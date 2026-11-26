@@ -2,6 +2,7 @@
 # REPORT=true also posts the result as the `PR title lint` commit status on HEAD_SHA, and lints the
 # title the pull request has now: the event's title is stale in a re-run, and when the title was
 # edited after the push. It needs GH_TOKEN and PR_NUMBER. ENFORCE=true fails on an invalid title.
+# Expects minor_types and non_shipped_paths (arrays) in addition to check_title's arrays.
 title=$PR_TITLE
 if [[ ${REPORT-} == true ]]; then
   title=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq .title) || title=$PR_TITLE
@@ -13,6 +14,60 @@ if ! problem=$(check_title "$title" 2>&1); then
   printf '::error title=Invalid PR title::%s Edit the PR title; this check reruns.\n' "$problem"
   state=failure
   description=$problem
+fi
+
+if [[ $state == success ]]; then
+  header=${title%%: *}
+  if [[ $header =~ ^([^()!]*)(\(([^()]*)\))?(!)?$ ]]; then
+    type=${BASH_REMATCH[1]}
+    breaking=${BASH_REMATCH[4]}
+
+    if ((${#non_shipped_paths[@]} > 0)) && [[ " ${changelog_types[*]} " == *" $type "* ]]; then
+      if files_out=$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files" --jq '.[].filename'); then
+        mapfile -t files <<<"$files_out"
+        shipped_found=false
+        file_count=0
+        for f in "${files[@]}"; do
+          [[ -n $f ]] || continue
+          file_count=$((file_count + 1))
+          matched=false
+          for pat in "${non_shipped_paths[@]}"; do
+            # shellcheck disable=SC2053
+            if [[ $f == $pat ]]; then
+              matched=true
+              break
+            fi
+          done
+          if ! $matched; then
+            shipped_found=true
+            break
+          fi
+        done
+        if ((file_count > 0)) && ! $shipped_found; then
+          problem="\"$title\": \"$type\" adds a changelog entry and bumps the version, but every changed file matches ci.commits.nonShippedPaths. Use a non-changelog type such as \"chore\", \"docs\", \"test\", or \"ci\"."
+          printf '::error title=Non-shipped PR using changelog type::%s\n' "$problem"
+          state=failure
+          description=$problem
+        fi
+      fi
+    fi
+
+    if [[ $state == success ]]; then
+      if [[ -n $breaking ]]; then
+        msg="This PR title (\"$title\") marks a breaking change and will trigger a **major** version bump on release."
+        printf '::notice title=Major version bump::%s\n' "$msg"
+        if [[ -n ${GITHUB_STEP_SUMMARY-} ]]; then
+          printf '### Version bump\n\n%s\n' "$msg" >>"$GITHUB_STEP_SUMMARY"
+        fi
+      elif [[ " ${minor_types[*]} " == *" $type "* ]]; then
+        msg="This PR title (\"$title\") uses \`$type\` and will trigger a **minor** version bump on release. Confirm this is a new user-facing capability (use \`improvement\` for patch-level tweaks, notices, or refinements)."
+        printf '::notice title=Minor version bump::%s\n' "$msg"
+        if [[ -n ${GITHUB_STEP_SUMMARY-} ]]; then
+          printf '### Version bump\n\n%s\n' "$msg" >>"$GITHUB_STEP_SUMMARY"
+        fi
+      fi
+    fi
+  fi
 fi
 
 if [[ ${REPORT-} == true ]]; then
