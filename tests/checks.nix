@@ -174,7 +174,53 @@ in {
         flakeCheck = plain.nix-check.jobs.flake-check;
         uses = prefix: builtins.any (step: lib.hasPrefix prefix (step.uses or "")) flakeCheck.steps;
         checkStep = lib.findFirst (step: (step.name or null) == "Check flake") {} flakeCheck.steps;
-        gcRun = cfg: (lib.last (import ../modules/github/workflows.nix {inherit cfg commits lib;}).hestia-gc.jobs.gc.steps).run;
+        gcSteps = cfg: (import ../modules/github/workflows.nix {inherit cfg commits lib;}).hestia-gc.jobs.gc.steps;
+        gcRun = cfg: (lib.findFirst (step: (step.name or null) == "Run garbage collection") {} (gcSteps cfg)).run;
+        gcJob = github.workflows.hestia-gc.jobs.gc;
+        gcStepNames = map (step: step.name) gcJob.steps;
+        # gh api [--paginate] <endpoint> --jq <filter> prints CACHES_JSON, or AFTER_JSON for the
+        # default branch's own listing; gh api --method DELETE .../caches/<id> records the ID.
+        stubCacheGh = pkgs.writeShellScriptBin "gh" ''
+          jq_expr=""
+          endpoint=""
+          method=GET
+          while (( $# )); do
+            case "$1" in
+              --jq)
+                jq_expr="$2"
+                shift 2
+                ;;
+              --method)
+                method="$2"
+                shift 2
+                ;;
+              api|--paginate)
+                shift
+                ;;
+              *)
+                endpoint="$1"
+                shift
+                ;;
+            esac
+          done
+          case "$method $endpoint" in
+            "DELETE repos/example/app/actions/caches/"*)
+              echo "''${endpoint##*/}" >>"$TMPDIR/deleted"
+              ;;
+            "GET repos/example/app/actions/caches?per_page=100&key=m3%23&ref=refs/heads/main")
+              printf '%s\n' "$AFTER_JSON" | ${lib.getExe pkgs.jq} -r "$jq_expr"
+              ;;
+            "GET repos/example/app/actions/caches?per_page=100&key=m3%23")
+              printf '%s\n' "$CACHES_JSON" | ${lib.getExe pkgs.jq} -r "$jq_expr"
+              ;;
+            *)
+              echo "unexpected gh call: $method $endpoint" >&2
+              exit 99
+              ;;
+          esac
+        '';
+        pruneManifests = ../modules/github/hestia-gc-manifests.sh;
+        checkManifests = ../modules/github/hestia-gc-check.sh;
       in
         assert github.cache == "hestia";
         assert uses "Mic92/hestia@";
@@ -185,7 +231,68 @@ in {
         assert (github.workflows.hestia-gc.jobs.gc.permissions.actions or null) == "write";
         assert lib.hasInfix " gc --push-ttl 3 " (gcRun github);
         assert !(lib.hasInfix "--push-ttl" (gcRun (github // {hestiaGc.pushTtlDays = null;})));
-          pkgs.runCommandLocal "hestia-cache" {} "touch $out";
+        # Manifest versions are pruned before the hestia daemon starts, and the result is checked after gc.
+        assert builtins.head gcStepNames == "Prune manifest versions";
+        assert lib.last gcStepNames == "Check the default branch kept its manifest";
+        assert (builtins.head gcJob.steps).env.DEFAULT_REF == "refs/heads/\${{ github.event.repository.default_branch }}";
+        assert (lib.last gcJob.steps)."if" == "steps.manifests.outputs.head == 'true' && inputs.dry-run != true";
+        assert gcJob.timeout-minutes == 45;
+          pkgs.runCommandLocal "hestia-cache" {nativeBuildInputs = [stubCacheGh];} ''
+            export GITHUB_REPOSITORY=example/app DEFAULT_REF=refs/heads/main GITHUB_OUTPUT="$TMPDIR/output"
+            recent=$(date -u -d '10 minutes ago' +%Y-%m-%dT%H:%M:%S.123456Z)
+            entry() {
+              printf '{"id":%s,"ref":"%s","version":"%s","key":"%s","created_at":"%s"}' "$@"
+            }
+            # On main: the newest version, a superseded one, and a stale one with a higher index.
+            # A second cache version namespace on main. A pull request's own versions, one of them
+            # keyed like main's newest. A key that is not a manifest version.
+            export CACHES_JSON="{\"actions_caches\":[$(
+              entry 10 refs/heads/main A 'm3#7' "$recent"
+            ),$(
+              entry 11 refs/heads/main A 'm3#6' 2026-01-02T00:00:00.5Z
+            ),$(
+              entry 12 refs/heads/main A 'm3#900' 2026-01-01T00:00:00.5Z
+            ),$(
+              entry 20 refs/heads/main B 'm3#2' 2026-01-02T00:00:00.5Z
+            ),$(
+              entry 21 refs/heads/main B 'm3#1' 2026-01-01T00:00:00.5Z
+            ),$(
+              entry 30 refs/pull/1/merge A 'm3#7' 2026-01-03T00:00:00.5Z
+            ),$(
+              entry 31 refs/pull/1/merge A 'm3#8' "$recent"
+            ),$(
+              entry 40 refs/heads/main A 'm3#draft' 2026-01-01T00:00:00.5Z
+            )]}"
+
+            # 1. A dry run deletes nothing.
+            DRY_RUN=true bash ${pruneManifests} > output
+            test ! -e "$TMPDIR/deleted"
+            grep -qx 'Dry run: 4 manifest version(s) would be deleted.' output
+
+            # 2. Deleted: main's superseded versions in both namespaces and the pull request's old one.
+            # Kept: each namespace's newest on main, and the pull request's version a job may still read.
+            DRY_RUN= bash ${pruneManifests} > output
+            test "$(sort -n "$TMPDIR/deleted" | paste -sd ' ')" = '11 12 21 30'
+            grep -qx 'keep    m3#7 on refs/heads/main' output
+            grep -qx 'keep    m3#2 on refs/heads/main' output
+            grep -qx 'recent  m3#8 on refs/pull/1/merge' output
+            grep -qx 'head=true' "$GITHUB_OUTPUT"
+
+            # 3. A cache without manifest versions has no head to lose.
+            : >"$GITHUB_OUTPUT"
+            CACHES_JSON='{"actions_caches":[]}' bash ${pruneManifests}
+            test ! -s "$GITHUB_OUTPUT"
+
+            # 4. After gc, a default branch without a manifest version fails the job.
+            AFTER_JSON="{\"actions_caches\":[$(entry 50 refs/heads/main A 'm3#8' "$recent")]}" bash ${checkManifests}
+            if AFTER_JSON='{"actions_caches":[]}' bash ${checkManifests} > output; then
+              echo "a default branch without a manifest version passed" >&2
+              exit 1
+            fi
+            grep -qF '::error title=hestia cache reset::' output
+
+            touch "$out"
+          '';
 
       # ci.github.vuln scans every declared target: all in the matrix, all in the lockfile loop.
       vuln-workflow = let

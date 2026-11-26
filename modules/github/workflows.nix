@@ -8,6 +8,10 @@
   steps = import ./steps.nix {inherit (cfg) extraNixConfig;};
   inherit (steps) flakeCheck flakeCheckNoBuild nixBuild nixRun;
   hestiaCache = cfg.cache == "hestia";
+  gcEnv = {
+    GH_TOKEN = "\${{ github.token }}";
+    DEFAULT_REF = "refs/heads/\${{ github.event.repository.default_branch }}";
+  };
   gcPushTtl = lib.optionalString (cfg.hestiaGc.pushTtlDays != null) " --push-ttl ${toString cfg.hestiaGc.pushTtlDays}";
   cacheStep =
     if hestiaCache
@@ -379,18 +383,32 @@ in
       jobs.gc = {
         name = "hestia-gc";
         runs-on = cfg.runner;
-        timeout-minutes = 15;
+        # gc downloads every manifest version and every pack it repacks; 15 minutes ran out on a few GiB.
+        timeout-minutes = 45;
         permissions = {
           actions = "write";
           contents = "read";
         };
         steps = [
+          # Before the daemon starts: gc must not see pull requests' manifest versions.
+          {
+            id = "manifests";
+            name = "Prune manifest versions";
+            env = gcEnv // {DRY_RUN = "\${{ inputs.dry-run }}";};
+            run = builtins.readFile ./hestia-gc-manifests.sh;
+          }
           steps.installNix
           (steps.hestia // {"with" = {inherit (steps.hestia."with") version;};})
           {
             name = "Run garbage collection";
             run = "\"$HESTIA_BIN\" gc${gcPushTtl} \${{ inputs.dry-run && '--dry-run' || '' }}";
             env.GITHUB_TOKEN = "\${{ github.token }}";
+          }
+          {
+            name = "Check the default branch kept its manifest";
+            "if" = "steps.manifests.outputs.head == 'true' && inputs.dry-run != true";
+            env = gcEnv;
+            run = builtins.readFile ./hestia-gc-check.sh;
           }
         ];
       };
