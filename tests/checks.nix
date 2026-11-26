@@ -21,16 +21,16 @@ in {
     description = char: length: lib.concatStrings (lib.genList (_: char) length);
     atLimit = "fix(api): ${description "x" commits.maxLength}";
     overLimit = "fix(api): ${description "x" (commits.maxLength + 1)}";
-    valid = ["feat(app): validate commit messages" "revert: description" "chore(ci): pin actions" "docs(api)!: drop old guide" atLimit];
+    valid = ["feat(app): validate commit messages" "improvement(app): improve navigation" "revert: description" "chore(ci): pin actions" "docs(api)!: drop old guide" atLimit];
     # The PR-title step of the generated workflows: check_title, then pr-title.sh.
-    titleLint = pkgs.writeShellScript "pr-title-lint" ''
-      ${commits.titleCheck}
-
-      ${builtins.readFile ../modules/github/pr-title.sh}
-    '';
-    # gh api .../pulls/<number> --jq .title prints LIVE_TITLE; a POST to .../statuses/<sha> is recorded.
+    titleLint = pkgs.writeShellScript "pr-title-lint" (builtins.head github.workflows.pr-title.jobs.lint.steps).run;
+    # gh api .../pulls/<number> --jq .title prints LIVE_TITLE; .../pulls/<number>/files prints PR_FILES;
+    # a POST to .../statuses/<sha> is recorded.
     stubTitleGh = pkgs.writeShellScriptBin "gh" ''
       case "$*" in
+        *"/pulls/7/files "*)
+          printf '%s\n' "''${PR_FILES:-app/src/App.vue}"
+          ;;
         *"/pulls/7 "*)
           [[ -n "''${LIVE_TITLE-}" ]] || exit 1
           printf '%s\n' "$LIVE_TITLE"
@@ -52,6 +52,8 @@ in {
       "fix(): x" = ''empty scope'';
       "fix(other): x" = ''unknown scope "other". Allowed scopes: api app ci'';
       "feat(ci): x" = ''use a type without a changelog entry, e.g. "chore(ci): x"'';
+      "feat: improve patient navigation" = ''Use "improvement: improve patient navigation"'';
+      "feat(app): Clean up old banner" = ''Use "improvement(app): Clean up old banner"'';
       "fix(api):  " = ''description after ": " is empty'';
       ${overLimit} = ''description is ${toString (commits.maxLength + 1)} characters, the limit is ${toString commits.maxLength}. Shorten it by 1'';
     };
@@ -88,6 +90,9 @@ in {
         fi
         printf '%s\n' ${lib.escapeShellArg "${overLimit} (#1234)"} | ${commitlint} --squash-merged 2> warning
         grep -qF 'description is ${toString (commits.maxLength + 1)} characters' warning
+        grep -q '^warning: ' warning
+        printf '%s\n' 'feat: improve navigation (#1234)' | ${commitlint} --squash-merged 2> warning
+        grep -qF 'prefer "improvement" (patch bump)' warning
         grep -q '^warning: ' warning
         if printf '%s\n' "not conventional (#1234)" | ${commitlint} --squash-merged; then
           echo "commitlint --squash-merged accepted an invalid subject" >&2
@@ -130,6 +135,65 @@ in {
 
         touch "$out"
       '';
+
+      pr-title-guardrails = let
+        standaloneWithoutPaths =
+          (import ../modules/github/workflows.nix {
+            cfg = github // {flakeCheck = github.flakeCheck // {pullRequests = github.flakeCheck.pullRequests // {enable = false;};};};
+            commits = commits // {nonShippedPaths = [];};
+            inherit lib;
+          }).pr-title;
+        standaloneWithPaths =
+          (import ../modules/github/workflows.nix {
+            cfg = github // {flakeCheck = github.flakeCheck // {pullRequests = github.flakeCheck.pullRequests // {enable = false;};};};
+            inherit commits lib;
+          }).pr-title;
+      in
+        assert standaloneWithoutPaths.permissions == {contents = "read";};
+        assert standaloneWithPaths.permissions
+        == {
+          contents = "read";
+          pull-requests = "read";
+        };
+          pkgs.runCommandLocal "pr-title-guardrails" {nativeBuildInputs = [stubTitleGh];} ''
+            export GITHUB_REPOSITORY=example/app GITHUB_SERVER_URL=https://example.test GITHUB_RUN_ID=1
+            export PR_NUMBER=7 HEAD_SHA=abc123 GITHUB_STEP_SUMMARY="$TMPDIR/summary"
+
+            # 1. Minor and major bump notices appear on feat and breaking titles.
+            : >"$GITHUB_STEP_SUMMARY"
+            output=$(PR_TITLE="feat(app): add calendar view" ENFORCE=true ${titleLint})
+            grep -qF '::notice title=Minor version bump::' <<<"$output"
+            grep -qF 'minor** version bump' "$GITHUB_STEP_SUMMARY"
+
+            : >"$GITHUB_STEP_SUMMARY"
+            output=$(PR_TITLE="fix(api)!: drop legacy endpoint" ENFORCE=true ${titleLint})
+            grep -qF '::notice title=Major version bump::' <<<"$output"
+            grep -qF 'major** version bump' "$GITHUB_STEP_SUMMARY"
+
+            # 2. Patch and non-changelog titles emit no bump notice.
+            : >"$GITHUB_STEP_SUMMARY"
+            output=$(PR_TITLE="improvement(app): show no-reply notice" ENFORCE=true ${titleLint})
+            test -z "$output"
+            test ! -s "$GITHUB_STEP_SUMMARY"
+
+            # 3. Non-shipped-only PRs fail on changelog types (and post failure when REPORT=true) and pass on non-changelog types.
+            if PR_TITLE="feat: add demo patients" PR_FILES=$'README.md\napi/priv/seed/demo.json' ENFORCE=true ${titleLint} >path_out; then
+              echo "non-shipped PR with feat passed" >&2
+              exit 1
+            fi
+            grep -qF '::error title=Non-shipped PR using changelog type::' path_out
+
+            PR_TITLE="feat: add demo patients" LIVE_TITLE="feat: add demo patients" PR_FILES=$'README.md\napi/priv/seed/demo.json' REPORT=true ${titleLint} >path_out
+            grep -qx 'state=failure' "$TMPDIR/status"
+
+            PR_TITLE="chore: update demo patients" PR_FILES=$'README.md\napi/priv/seed/demo.json' ENFORCE=true ${titleLint}
+
+            # 4. A PR with at least one shipped file passes and emits the minor bump notice.
+            output=$(PR_TITLE="feat(app): add calendar view" PR_FILES=$'README.md\napp/src/Calendar.vue' ENFORCE=true ${titleLint})
+            grep -qF '::notice title=Minor version bump::' <<<"$output"
+
+            touch "$out"
+          '';
 
       release-lifecycle =
         pkgs.runCommand "release-lifecycle" {
@@ -513,7 +577,8 @@ in {
         standaloneTitleJob =
           (import ../modules/github/workflows.nix {
             cfg = github // {flakeCheck = github.flakeCheck // {pullRequests = github.flakeCheck.pullRequests // {enable = false;};};};
-            inherit commits lib;
+            commits = commits // {nonShippedPaths = [];};
+            inherit lib;
           }).pr-title.jobs.lint;
         head = "\${{ github.event.pull_request.head.sha }}";
         sameRepo = "github.event.pull_request.head.repo.full_name == github.repository";

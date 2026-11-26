@@ -1,5 +1,6 @@
 # check_title TITLE [--squash-merged]
-# Expects changelog_types, other_types, changelog_scopes, other_scopes (arrays) and max_length.
+# Expects changelog_types, other_types, changelog_scopes, other_scopes,
+# feat_disallowed_verbs (arrays) and max_length.
 check_title() {
   local title=$1 squash_merged=${2-}
   local all_types=("${changelog_types[@]}" "${other_types[@]}")
@@ -45,6 +46,23 @@ check_title() {
   if [[ -z "${description// /}" ]]; then
     printf '"%s": the description after ": " is empty.\n' "$title" >&2
     return 1
+  fi
+  if [[ "$type" == "feat" && ${#feat_disallowed_verbs[@]} -gt 0 ]]; then
+    local desc_lower=${description,,} verb verb_lower
+    for verb in "${feat_disallowed_verbs[@]}"; do
+      verb_lower=${verb,,}
+      if [[ "$desc_lower" == "$verb_lower" || "$desc_lower" == "$verb_lower "* ]]; then
+        if [[ -n "$squash_merged" ]]; then
+          printf 'warning: "%s": description starts with "%s"; prefer "improvement" (patch bump) over "feat" (minor bump).\n' \
+            "$title" "$verb" >&2
+        else
+          printf '"%s": descriptions starting with "%s" belong under "improvement" (patch bump), not "feat" (minor bump). Use "improvement%s: %s" or reword if this is genuinely a new user-facing capability.\n' \
+            "$title" "$verb" "$parens" "$description" >&2
+          return 1
+        fi
+        break
+      fi
+    done
   fi
   local length
   length=$(

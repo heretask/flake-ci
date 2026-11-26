@@ -59,6 +59,44 @@ in {
       };
     };
 
+    featDisallowedVerbs = mkOption {
+      type = types.listOf types.str;
+      default = [
+        "improve"
+        "improves"
+        "improving"
+        "refine"
+        "refines"
+        "refining"
+        "tweak"
+        "tweaks"
+        "tweaking"
+        "cleanup"
+        "clean up"
+        "polish"
+        "polishes"
+        "polishing"
+        "adjust"
+        "adjusts"
+        "adjusting"
+      ];
+      description = ''
+        Leading words disallowed on `feat` descriptions when `improvement`
+        is an allowed type. Set to `[]` to disable.
+      '';
+    };
+
+    nonShippedPaths = mkOption {
+      type = types.listOf types.str;
+      default = [];
+      example = ["docs/*" ".github/*" "*.md" "api/lib/ht/seed/demo/*"];
+      description = ''
+        Shell glob patterns for paths that ship nothing. When non-empty, the
+        PR-title check rejects changelog types on pull requests whose changed
+        files all match a pattern.
+      '';
+    };
+
     titleCheck = mkOption {
       type = types.str;
       readOnly = true;
@@ -88,11 +126,16 @@ in {
       };
       titleCheck = let
         typesWhere = keep: builtins.attrNames (lib.filterAttrs (_: type: keep type.bump) cfg.types);
+        disallowedVerbs =
+          if cfg.types ? feat && cfg.types ? improvement
+          then cfg.featDisallowedVerbs
+          else [];
       in ''
         changelog_types=(${lib.escapeShellArgs (typesWhere (bump: bump != null))})
         other_types=(${lib.escapeShellArgs (typesWhere (bump: bump == null))})
         changelog_scopes=(${lib.escapeShellArgs cfg.scopes.changelog})
         other_scopes=(${lib.escapeShellArgs cfg.scopes.other})
+        feat_disallowed_verbs=(${lib.escapeShellArgs disallowedVerbs})
         max_length=${toString cfg.maxLength}
         ${builtins.readFile ./check-title.sh}'';
     };

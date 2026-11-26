@@ -60,6 +60,8 @@ Then run `nix run .#write-files` and commit the generated files.
 | `ci.commits.maxLength` | `72` | Maximum description length in characters, after `type(scope): `. The ` (#123)` suffix of a squash merge does not count. |
 | `ci.commits.scopes.changelog` | `[]` | Scopes allowed on bumping types, in changelog order. Empty allows any scope on any type. |
 | `ci.commits.scopes.other` | `[]` | Scopes allowed only on non-bumping types. The PR-title check and commitlint reject e.g. `feat(nix)`; the changelog drops entries with these scopes and they do not bump the version. |
+| `ci.commits.featDisallowedVerbs` | `["improve" "refine" "tweak" "cleanup" "clean up" "polish" "adjust" …]` | Leading words rejected on `feat` descriptions when `improvement` is an allowed type (warns on `--squash-merged`). Set to `[]` to disable. |
+| `ci.commits.nonShippedPaths` | `[]` | Shell glob patterns for paths that ship nothing. When non-empty, `PR title lint` rejects changelog types on pull requests whose changed files all match a pattern. |
 | `ci.signoff.enable` | `true` | `signoff` package and app. |
 | `ci.signoff.skipChecks` | `[]` | `checks` attributes `signoff` does not build; `nix flake check` and main's workflow still build them. |
 | `ci.github.enable` | `true` | Generated workflows. |

@@ -31,9 +31,16 @@
             prebuildEventType = "prebuild";
           };
         };
-        ci.commits.scopes = {
-          changelog = ["api" "app"];
-          other = ["ci"];
+        ci.commits = {
+          scopes = {
+            changelog = ["api" "app"];
+            other = ["ci"];
+          };
+          nonShippedPaths = [
+            "docs/*"
+            "*.md"
+            "api/priv/seed/*"
+          ];
         };
         # All differ from their defaults so the fixture-flake-check-job check can tell them apart.
         ci.github.flakeCheck = {
@@ -114,7 +121,7 @@
       assert !(plainConsumer ? prChecks);
       assert !(unfilteredPrConsumer ? prChecks);
         lib.mapAttrs' (name: lib.nameValuePair "fixture-${name}") (
-          lib.getAttrs ["commitlint" "release-lifecycle" "release-version" "workflow-behavior" "actionlint" "workflow-orphans" "flake-check-job" "flake-check-disabled" "matrix-job" "prebuild-shared" "flake-check-pr" "signoff-pr" "flake-ci-groups" "hestia-cache" "input-update-token" "vuln-workflow"] allChecks
+          lib.getAttrs ["commitlint" "pr-title-guardrails" "release-lifecycle" "release-version" "workflow-behavior" "actionlint" "workflow-orphans" "flake-check-job" "flake-check-disabled" "matrix-job" "prebuild-shared" "flake-check-pr" "signoff-pr" "flake-ci-groups" "hestia-cache" "input-update-token" "vuln-workflow"] allChecks
         );
   };
 }
