@@ -65,6 +65,44 @@
     };
 
   prHead = "\${{ github.event.pull_request.head.sha }}";
+  sameRepository = "github.event.pull_request.head.repo.full_name == github.repository";
+  # The Nix PR workflow starts on every push to a same-repository pull request, so its first job
+  # lints the title there and posts it as the `PR title lint` commit status. The PR title workflow
+  # then only has to run when the title changes, and for forks, whose token cannot post a status.
+  lintTitleInNixPr = cfg.flakeCheck.enable && cfg.flakeCheck.pullRequests.enable;
+  # `report` posts the commit status; `enforce` fails the step on an invalid title.
+  lintTitle = {
+    report,
+    enforce,
+  }: {
+    name = "Lint PR title";
+    env =
+      {PR_TITLE = "\${{ github.event.pull_request.title }}";}
+      // lib.optionalAttrs (report != "false") {
+        REPORT = report;
+        GH_TOKEN = "\${{ github.token }}";
+        HEAD_SHA = prHead;
+        PR_NUMBER = "\${{ github.event.pull_request.number }}";
+      }
+      // lib.optionalAttrs enforce {ENFORCE = "true";};
+    run = ''
+      ${commits.titleCheck}
+
+      ${builtins.readFile ./pr-title.sh}'';
+  };
+  # A check job on a pull request also reads the title and posts its status.
+  checkJobPermissions = pullRequest:
+    if pullRequest
+    then {
+      permissions =
+        {
+          contents = "read";
+          pull-requests = "read";
+          statuses = "write";
+        }
+        // lib.optionalAttrs hestiaCache {actions = "read";};
+    }
+    else hestiaJobPermissions;
   flakeJobs = pullRequest: let
     filtered = pullRequest && cfg.flakeCheck.pullRequests.skipChecks != [];
     checkOutput =
@@ -82,10 +120,13 @@
           };
         }
       else steps.checkout;
-    onlySameRepository = lib.optionalAttrs pullRequest {
-      "if" = "github.event.pull_request.head.repo.full_name == github.repository";
-    };
-    setupSteps = [checkout reclaimStep steps.installNix cacheStep] ++ lib.optional (!pullRequest) lintCommit;
+    onlySameRepository = lib.optionalAttrs pullRequest {"if" = sameRepository;};
+    # Early, so an invalid title is reported within seconds. An invalid title does not fail the job.
+    lintPullRequestTitle = lib.optional pullRequest (lintTitle {
+      report = "true";
+      enforce = false;
+    });
+    setupSteps = [checkout] ++ lintPullRequestTitle ++ [reclaimStep steps.installNix cacheStep] ++ lib.optional (!pullRequest) lintCommit;
   in
     if flakeMatrix
     then {
@@ -110,7 +151,7 @@
             ]
             ++ lib.optional cfg.flakeCheck.prebuildShared (timedStep flakeCheckTimeout (steps.prebuildShared nixBuild));
         }
-        // hestiaJobPermissions
+        // checkJobPermissions pullRequest
         // onlySameRepository;
       build =
         {
@@ -167,7 +208,7 @@
               else lib.optional checkVersionInvariance versionInvarianceStep ++ [(checkFlake flakeCheckTimeout)]
             );
         }
-        // hestiaJobPermissions
+        // checkJobPermissions pullRequest
         // onlySameRepository;
     };
 
@@ -252,25 +293,30 @@ in
         "synchronize"
       ];
       permissions.contents = "read";
-      jobs.lint = {
-        name = "PR title lint";
-        runs-on = cfg.runner;
-        timeout-minutes = 5;
-        steps = [
-          {
-            name = "Lint PR title";
-            env.PR_TITLE = "\${{ github.event.pull_request.title }}";
-            run = ''
-              ${commits.titleCheck}
-
-              if ! problem=$(check_title "$PR_TITLE" 2>&1); then
-                printf '::error title=Invalid PR title::%s Edit the PR title; this check reruns.\n' "$problem"
-                exit 1
-              fi
-            '';
-          }
-        ];
-      };
+      jobs.lint =
+        {
+          name = "PR title lint";
+          runs-on = cfg.runner;
+          timeout-minutes = 5;
+          steps = [
+            (lintTitle {
+              report =
+                if lintTitleInNixPr
+                then "\${{ ${sameRepository} }}"
+                else "false";
+              enforce = true;
+            })
+          ];
+        }
+        # Skipped on a push to a same-repository pull request: the skipped check satisfies the
+        # required `PR title lint` check, and the Nix PR workflow posts the status of the same name.
+        // lib.optionalAttrs lintTitleInNixPr {
+          "if" = "github.event.pull_request.head.repo.full_name != github.repository || (github.event.action == 'edited' && github.event.changes.title != null)";
+          permissions = {
+            pull-requests = "read";
+            statuses = "write";
+          };
+        };
     };
 
     # A null name omits the workflow.

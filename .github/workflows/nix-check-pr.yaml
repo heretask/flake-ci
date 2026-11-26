@@ -11,6 +11,8 @@ jobs:
     permissions:
       actions: read
       contents: read
+      pull-requests: read
+      statuses: write
     runs-on: ubuntu-24.04
     steps:
     - name: Checkout (v7.0.1)
@@ -18,6 +20,116 @@ jobs:
       with:
         persist-credentials: false
         ref: ${{ github.event.pull_request.head.sha }}
+    - env:
+        GH_TOKEN: ${{ github.token }}
+        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        PR_TITLE: ${{ github.event.pull_request.title }}
+        REPORT: 'true'
+      name: Lint PR title
+      run: |-
+        changelog_types=(feat fix improvement perf refactor revert)
+        other_types=(build chore ci docs style test)
+        changelog_scopes=()
+        other_scopes=()
+        max_length=72
+        # check_title TITLE [--squash-merged]
+        # Expects changelog_types, other_types, changelog_scopes, other_scopes (arrays) and max_length.
+        check_title() {
+          local title=$1 squash_merged=${2-}
+          local all_types=("${changelog_types[@]}" "${other_types[@]}")
+          local all_scopes=("${changelog_scopes[@]}" "${other_scopes[@]}")
+          # GitHub appends " (#<PR number>)" when it squash-merges; the PR-title check never saw it.
+          if [[ -n "$squash_merged" && "$title" =~ ^(.*)\ \(#[0-9]+\)$ ]]; then
+            title=${BASH_REMATCH[1]}
+          fi
+
+          local header=${title%%: *}
+          local description=${title#*: }
+          if [[ "$header" == "$title" ]]; then
+            printf '"%s": missing ": " after the type. Write "type: description" or "type(scope): description", e.g. "fix: handle an empty list".\n' "$title" >&2
+            return 1
+          fi
+          if [[ ! "$header" =~ ^([^()!]*)(\(([^()]*)\))?(!)?$ ]]; then
+            printf '"%s": "%s" is not "type", "type(scope)", "type!" or "type(scope)!".\n' "$title" "$header" >&2
+            return 1
+          fi
+          local type=${BASH_REMATCH[1]} parens=${BASH_REMATCH[2]} scope=${BASH_REMATCH[3]}
+
+          if [[ " ${all_types[*]} " != *" $type "* ]]; then
+            printf '"%s": unknown type "%s". Changelog types: %s. Other types: %s.\n' \
+              "$title" "$type" "${changelog_types[*]}" "${other_types[*]}" >&2
+            return 1
+          fi
+          if [[ -n "$parens" && -z "$scope" ]]; then
+            printf '"%s": empty scope "()". Drop the parentheses or name a scope.\n' "$title" >&2
+            return 1
+          fi
+          if [[ -n "$scope" && ${#all_scopes[@]} -gt 0 ]]; then
+            if [[ " ${all_scopes[*]} " != *" $scope "* ]]; then
+              printf '"%s": unknown scope "%s". Allowed scopes: %s, or no scope.\n' "$title" "$scope" "${all_scopes[*]}" >&2
+              return 1
+            fi
+            if [[ " ${changelog_types[*]} " == *" $type "* && " ${changelog_scopes[*]} " != *" $scope "* ]]; then
+              printf '"%s": "%s" adds a changelog entry, but "%s" changes ship nothing. Changelog types take %s, or no scope. If nothing shipped changed, use a type without a changelog entry, e.g. "chore(%s): %s".\n' \
+                "$title" "$type" "$scope" "${changelog_scopes[*]}" "$scope" "$description" >&2
+              return 1
+            fi
+          fi
+
+          if [[ -z "${description// /}" ]]; then
+            printf '"%s": the description after ": " is empty.\n' "$title" >&2
+            return 1
+          fi
+          local length
+          length=$(
+            LC_ALL=C
+            stripped=${description//[$'\x80'-$'\xbf']/}
+            printf '%d' "${#stripped}"
+          )
+          if ((length > max_length)); then
+            # A pushed commit cannot be reworded, so on main the length is only reported.
+            if [[ -n "$squash_merged" ]]; then
+              printf 'warning: "%s": description is %d characters, the limit is %d.\n' "$title" "$length" "$max_length" >&2
+            else
+              printf '"%s": description is %d characters, the limit is %d. Shorten it by %d.\n' \
+                "$title" "$length" "$max_length" "$((length - max_length))" >&2
+              return 1
+            fi
+          fi
+        }
+
+
+        # Lints the pull request's title with check_title, defined above. PR_TITLE is the title in the event.
+        # REPORT=true also posts the result as the `PR title lint` commit status on HEAD_SHA, and lints the
+        # title the pull request has now: the event's title is stale in a re-run, and when the title was
+        # edited after the push. It needs GH_TOKEN and PR_NUMBER. ENFORCE=true fails on an invalid title.
+        title=$PR_TITLE
+        if [[ ${REPORT-} == true ]]; then
+          title=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq .title) || title=$PR_TITLE
+        fi
+
+        state=success
+        description="The title follows the commit convention"
+        if ! problem=$(check_title "$title" 2>&1); then
+          printf '::error title=Invalid PR title::%s Edit the PR title; this check reruns.\n' "$problem"
+          state=failure
+          description=$problem
+        fi
+
+        if [[ ${REPORT-} == true ]]; then
+          # A status description holds 140 characters; the annotation above has the whole message.
+          if ! gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$HEAD_SHA" \
+            -f context='PR title lint' -f state="$state" -f description="${description:0:140}" \
+            -f "target_url=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null; then
+            echo "::error title=PR title lint::Could not post the PR title lint status."
+            exit 1
+          fi
+        fi
+
+        if [[ $state == failure && ${ENFORCE-} == true ]]; then
+          exit 1
+        fi
     - name: Make room for Nix (nothing-but-nix v12)
       uses: wimpysworld/nothing-but-nix@b2574ec1cf1462bee0a34de0fb6ff11ad3c43cb2
       with:
