@@ -42,6 +42,7 @@
           reclaimDisk = "background";
           queue = true;
           matrix = true;
+          prebuildShared = true;
           pullRequests.enable = true;
         };
         ci.signoff.skipChecks = ["commitlint"];
@@ -113,7 +114,7 @@
       assert !(plainConsumer ? prChecks);
       assert !(unfilteredPrConsumer ? prChecks);
         lib.mapAttrs' (name: lib.nameValuePair "fixture-${name}") (
-          lib.getAttrs ["commitlint" "release-lifecycle" "release-version" "workflow-behavior" "actionlint" "workflow-orphans" "flake-check-job" "flake-check-disabled" "matrix-job" "flake-check-pr" "signoff-pr" "flake-ci-groups" "hestia-cache" "input-update-token" "vuln-workflow"] allChecks
+          lib.getAttrs ["commitlint" "release-lifecycle" "release-version" "workflow-behavior" "actionlint" "workflow-orphans" "flake-check-job" "flake-check-disabled" "matrix-job" "prebuild-shared" "flake-check-pr" "signoff-pr" "flake-ci-groups" "hestia-cache" "input-update-token" "vuln-workflow"] allChecks
         );
   };
 }

@@ -103,7 +103,8 @@
               # One system only: the runner cannot build other systems' checks, and hestia's
               # default runner map would send darwin checks to macOS runners.
               (steps.hestiaMatrix nixRun ".#${checkOutput}.x86_64-linux" cfg.flakeCheck.runner)
-            ];
+            ]
+            ++ lib.optional cfg.flakeCheck.prebuildShared (timedStep flakeCheckTimeout (steps.prebuildShared nixBuild));
         }
         // hestiaJobPermissions
         // onlySameRepository;

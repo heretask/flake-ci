@@ -94,6 +94,18 @@ in {
       '';
     };
 
+    flakeCheck.prebuildShared = mkOption {
+      type = types.bool;
+      default = false;
+      example = true;
+      description = ''
+        With `flakeCheck.matrix`, build in the `eval` job the uncached derivations that more than one
+        build job depends on, e.g. a compile step several test checks share. The build jobs then
+        fetch them instead of each building its own copy. A derivation that fails to build here does
+        not fail `eval`; the jobs that need it report it.
+      '';
+    };
+
     cache = mkOption {
       type = types.enum ["magic-nix-cache" "hestia"];
       default = "magic-nix-cache";

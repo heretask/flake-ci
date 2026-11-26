@@ -143,4 +143,16 @@ in {
       nix-eval-jobs = "${nixRun} --inputs-from . nixpkgs#nix-eval-jobs --";
     };
   };
+
+  # Runs in the eval job after the matrix step. hestia uploads what it builds when the job ends,
+  # which is before any build job starts.
+  prebuildShared = nixBuild: {
+    name = "Build dependencies shared by build jobs";
+    "if" = "steps.matrix.outputs.any-jobs == 'true'";
+    env = {
+      MATRIX = "\${{ steps.matrix.outputs.matrix }}";
+      NIX_BUILD = nixBuild;
+    };
+    run = builtins.readFile ./prebuild-shared.sh;
+  };
 }
