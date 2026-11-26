@@ -205,6 +205,8 @@ in {
             inherit lib;
           }).config.content.ci.github.workflows.vuln;
         # gh api <endpoint> ... --jq <filter>: the pull requests of a commit, then the runs of a head.
+        # gh api <endpoint> ... --jq <filter>: the pull requests of a commit, the commit's tree, the
+        # runs of a head, and the artifacts of a run.
         stubGh = pkgs.writeShellScriptBin "gh" ''
           jq_expr=""
           endpoint=""
@@ -226,9 +228,16 @@ in {
                 ;;
             esac
           done
+          merged_commit='{"tree":{"sha":"tree-merged"}}'
           case "$endpoint" in
-            */commits/*/pulls) body="$PULLS_JSON" ;;
+            */commits/merge/pulls) body="$PULLS_JSON" ;;
+            */git/commits/merge) body="''${COMMIT_JSON-$merged_commit}" ;;
             */actions/workflows/vuln.yaml/runs) body="$RUNS_JSON" ;;
+            */actions/runs/*/artifacts)
+              run="''${endpoint%/artifacts}"
+              artifacts="ARTIFACTS_''${run##*/}"
+              body="''${!artifacts-}"
+              ;;
             *)
               echo "unexpected gh api endpoint: $endpoint" >&2
               exit 99
@@ -276,6 +285,11 @@ in {
         };
         assert scan.needs == "merged";
         assert scan."if" == "\${{ !cancelled() && needs.merged.outputs.scanned != 'true' }}";
+        # One matrix job of a pull request records the tree it checked out, before anything can fail.
+        assert index "Record the scanned tree" scan == 1;
+        assert (stepNamed "Record the scanned tree" scan)."if" == "github.event_name == 'pull_request' && strategy.job-index == 0";
+        assert (stepNamed "Upload the scanned tree's record" scan)."with".name == "vuln-tree-\${{ steps.tree.outputs.tree }}";
+        assert index "Record the scanned tree" scheduledOnly.jobs.scan == null;
         assert !(scheduledOnly.jobs ? merged);
         assert !(scheduledOnly.jobs.scan ? needs) && !(scheduledOnly.jobs.scan ? "if");
         assert !(scheduledOnly.on ? push);
@@ -294,35 +308,59 @@ in {
             export GITHUB_REPOSITORY=example/app GITHUB_SHA=merge WORKFLOW=vuln.yaml
             export GITHUB_OUTPUT="$TMPDIR/output" GITHUB_STEP_SUMMARY="$TMPDIR/summary"
             merged='[{"merge_commit_sha":"other","head":{"sha":"wrong"}},{"merge_commit_sha":"merge","head":{"sha":"head"}}]'
+            run_json() {
+              printf '{"id":%s,"conclusion":"%s","html_url":"https://example.test/%s"}' "$1" "$2" "$1"
+            }
+            runs() {
+              local IFS=,
+              printf '{"workflow_runs":[%s]}' "$*"
+            }
+            artifacts() {
+              printf '{"artifacts":[{"name":"vuln-api"},{"name":"vuln-tree-%s"}]}' "$1"
+            }
             run() {
               : >"$GITHUB_OUTPUT"
               PULLS_JSON="$1" RUNS_JSON="$2" bash -e ${scannedMerge}
             }
 
-            # 1. The merged pull request's scan passed: no second scan.
-            run "$merged" '{"workflow_runs":[{"conclusion":"cancelled","html_url":"https://example.test/cancelled"},{"conclusion":"success","html_url":"https://example.test/passed"}]}'
+            # 1. The merged pull request's scan checked out this commit's tree and passed: no second
+            # scan. A newer run of the same head scanned another tree, and a cancelled one nothing.
+            export ARTIFACTS_1="$(artifacts tree-merged)" ARTIFACTS_2="$(artifacts tree-older-main)" ARTIFACTS_3="$(artifacts tree-merged)"
+            run "$merged" "$(runs "$(run_json 3 cancelled)" "$(run_json 2 failure)" "$(run_json 1 success)")"
             grep -qx 'scanned=true' "$GITHUB_OUTPUT"
-            grep -qF 'https://example.test/passed' "$GITHUB_STEP_SUMMARY"
+            grep -qF 'https://example.test/1' "$GITHUB_STEP_SUMMARY"
 
-            # 2. It failed: no second scan, and the push fails with a link to that run.
-            if output="$(run "$merged" '{"workflow_runs":[{"conclusion":"failure","html_url":"https://example.test/failed"}]}')"; then
+            # 2. It failed on this tree: no second scan, and the push fails with a link to that run.
+            if output="$(run "$merged" "$(runs "$(run_json 1 failure)")")"; then
               echo "a push that merged a failed scan passed" >&2
               exit 1
             fi
             grep -qx 'scanned=true' "$GITHUB_OUTPUT"
             grep -qF '::error title=Scan failed on the pull request::' <<<"$output"
-            grep -qF 'https://example.test/failed' <<<"$output"
+            grep -qF 'https://example.test/1' <<<"$output"
 
-            # 3. Scan: a direct push, a pull request never scanned or only cancelled, and a failed lookup.
-            run '[]' '{"workflow_runs":[]}'
+            # 3. Scan when main changed after the pull request's scan: the trees differ.
+            output="$(run "$merged" "$(runs "$(run_json 2 success)")")"
             test ! -s "$GITHUB_OUTPUT"
-            run "$merged" '{"workflow_runs":[]}'
+            grep -qF 'recorded this tree' <<<"$output"
+            # A run from before trees were recorded has no record.
+            ARTIFACTS_1='{"artifacts":[{"name":"vuln-api"}]}' run "$merged" "$(runs "$(run_json 1 success)")"
             test ! -s "$GITHUB_OUTPUT"
-            run "$merged" '{"workflow_runs":[{"conclusion":"cancelled","html_url":"https://example.test/cancelled"}]}'
+
+            # 4. Scan: a direct push, a pull request never scanned or only cancelled, and failed lookups.
+            run '[]' "$(runs)"
+            test ! -s "$GITHUB_OUTPUT"
+            run "$merged" "$(runs)"
+            test ! -s "$GITHUB_OUTPUT"
+            run "$merged" "$(runs "$(run_json 3 cancelled)")"
             test ! -s "$GITHUB_OUTPUT"
             run "" ""
             test ! -s "$GITHUB_OUTPUT"
             run "$merged" ""
+            test ! -s "$GITHUB_OUTPUT"
+            COMMIT_JSON= run "$merged" "$(runs "$(run_json 1 success)")"
+            test ! -s "$GITHUB_OUTPUT"
+            ARTIFACTS_1= run "$merged" "$(runs "$(run_json 1 success)")"
             test ! -s "$GITHUB_OUTPUT"
 
             touch "$out"
