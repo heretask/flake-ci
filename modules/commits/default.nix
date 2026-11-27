@@ -6,9 +6,10 @@
   inherit (lib) mkDefault mkOption types;
   cfg = config.ci.commits;
 
-  defaultType = title: bump: {
+  defaultType = title: bump: description: {
     title = mkDefault title;
     bump = mkDefault bump;
+    description = mkDefault description;
   };
 in {
   options.ci.commits = {
@@ -27,6 +28,16 @@ in {
           bump = mkOption {
             type = types.nullOr (types.enum ["minor" "patch"]);
             description = "SemVer bump; null omits the type from the changelog.";
+          };
+          description = mkOption {
+            type = types.str;
+            default = "";
+            example = "dependencies, toolchain, packaging and build configuration";
+            description = ''
+              What the type is for, in a few words. The title check lists the
+              types without a changelog entry with these when it rejects a
+              changelog type, so the author can pick the one that fits.
+            '';
           };
         };
       });
@@ -111,21 +122,26 @@ in {
   config = {
     ci.commits = {
       types = {
-        feat = defaultType "Features" "minor";
-        fix = defaultType "Bug Fixes" "patch";
-        improvement = defaultType "Improvements" "patch";
-        perf = defaultType "Performance" "patch";
-        refactor = defaultType "Refactoring" "patch";
-        revert = defaultType "Reverts" "patch";
-        build = defaultType "Build" null;
-        chore = defaultType "Chores" null;
-        ci = defaultType "CI" null;
-        docs = defaultType "Documentation" null;
-        style = defaultType "Style" null;
-        test = defaultType "Tests" null;
+        feat = defaultType "Features" "minor" "a new capability";
+        fix = defaultType "Bug Fixes" "patch" "a bug fix";
+        improvement = defaultType "Improvements" "patch" "a refinement of an existing feature";
+        perf = defaultType "Performance" "patch" "a performance improvement";
+        refactor = defaultType "Refactoring" "patch" "a restructuring that keeps behaviour";
+        revert = defaultType "Reverts" "patch" "the revert of an earlier commit";
+        build = defaultType "Build" null "dependencies, toolchain, packaging and build configuration";
+        chore = defaultType "Chores" null "only when no other type fits";
+        ci = defaultType "CI" null "CI workflows and the checks they run";
+        docs = defaultType "Documentation" null "documentation only";
+        style = defaultType "Style" null "formatting only";
+        test = defaultType "Tests" null "tests only";
       };
       titleCheck = let
         typesWhere = keep: builtins.attrNames (lib.filterAttrs (_: type: keep type.bump) cfg.types);
+        # "build (dependencies, …), chore (only when no other type fits), ci (…)".
+        otherTypesHelp = lib.concatStringsSep ", " (lib.mapAttrsToList (
+          name: type:
+            name + lib.optionalString (type.description != "") " (${type.description})"
+        ) (lib.filterAttrs (_: type: type.bump == null) cfg.types));
         disallowedVerbs =
           if cfg.types ? feat && cfg.types ? improvement
           then cfg.featDisallowedVerbs
@@ -133,6 +149,7 @@ in {
       in ''
         changelog_types=(${lib.escapeShellArgs (typesWhere (bump: bump != null))})
         other_types=(${lib.escapeShellArgs (typesWhere (bump: bump == null))})
+        other_types_help=${lib.escapeShellArg otherTypesHelp}
         changelog_scopes=(${lib.escapeShellArgs cfg.scopes.changelog})
         other_scopes=(${lib.escapeShellArgs cfg.scopes.other})
         feat_disallowed_verbs=(${lib.escapeShellArgs disallowedVerbs})

@@ -22,7 +22,7 @@ jobs:
       with:
         base: main
         branch: automation/nixpkgs-vuln
-        commit-msg: 'chore: update nixpkgs-vuln'
+        commit-msg: 'build: update nixpkgs-vuln'
         inputs: nixpkgs-vuln
         nix-options: --option accept-flake-config false
         pr-body: |-
@@ -31,7 +31,7 @@ jobs:
           This PR is refreshed automatically. Make fixes in a separate PR to `main`.
 
           Approve workflow runs when prompted, then run the normal checks and merge manually.
-        pr-title: 'chore: update nixpkgs-vuln'
+        pr-title: 'build: update nixpkgs-vuln'
     timeout-minutes: 15
 name: Update nixpkgs-vuln
 'on':
