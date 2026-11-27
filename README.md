@@ -2,7 +2,7 @@
 
 A [flake-parts](https://flake.parts) module for repository automation, configured through `ci.*`:
 
-- **Commit convention**: one list of Conventional Commit types and scopes drives commitlint (`nix run .#commitlint`), the PR-title check, and `cog.toml`. commitlint and the PR-title check share one script, so both name the exact problem: an unknown type or scope, a tooling scope on a changelog type (with the `chore(scope): …` to use instead), a missing `: `, or the characters over the limit.
+- **Commit convention**: one list of Conventional Commit types and scopes drives commitlint (`nix run .#commitlint`), the PR-title check, and `cog.toml`. commitlint and the PR-title check share one script, so both name the exact problem: an unknown type or scope, a tooling scope on a changelog type (with the types that add no changelog entry and what each is for), a missing `: `, or the characters over the limit.
 - **Signoff**: `nix run .#signoff` runs `nix flake check`, then marks the tested commit with [gh-signoff](https://github.com/basecamp/gh-signoff). Works from Git and Jujutsu. With `ci.signoff.skipChecks` set, it runs `nix flake check --no-build`, builds every other check of the current system in one `nix build`, and names the skipped checks.
 - **Releases**: `nix run .#release` prepares `VERSION`/`CHANGELOG.md` with [cocogitto](https://github.com/cocogitto/cocogitto), tags rc and stable releases, and advances channel branches from a dispatched workflow. Changelog sections follow the [Ash](https://github.com/ash-project/ash/blob/main/CHANGELOG.md) style: a compare link and the date of the newest entry in the heading, breaking changes first, then one section per commit type in `cog.toml` order, each entry crediting its author (`@handle` for GitHub noreply emails) and linking the `(#N)` pull request.
   One `Release` run prepares `main` (the release App pushes the `VERSION`/`CHANGELOG.md` commit itself, so it must be allowed to bypass the rules on `main`), waits for the flake check on that commit unless `skip_ci` is set, then tags and moves the channel. `release stable` needs no RC: it tags any prepared commit, whether or not an RC points at it.
@@ -56,12 +56,12 @@ Then run `nix run .#write-files` and commit the generated files.
 
 | Option | Default | Purpose |
 | --- | --- | --- |
-| `ci.commits.types.<type>.{title,bump}` | `feat`, `fix`, `improvement`, `perf`, `refactor`, `revert` (bumping); `build`, `chore`, `ci`, `docs`, `style`, `test` | Allowed types, changelog title, SemVer bump (`null` omits from the changelog). Defaults merge per type; replace the set with `lib.mkForce`. |
+| `ci.commits.types.<type>.{title,bump,description}` | `feat`, `fix`, `improvement`, `perf`, `refactor`, `revert` (bumping); `build`, `chore`, `ci`, `docs`, `style`, `test` | Allowed types, changelog title, SemVer bump (`null` omits from the changelog), and a few words on what the type is for. When the checks reject a changelog type, they list the non-bumping types with their descriptions, e.g. `build (dependencies, toolchain, packaging and build configuration)`; `chore` is described as "only when no other type fits". Defaults merge per type; replace the set with `lib.mkForce`. |
 | `ci.commits.maxLength` | `72` | Maximum description length in characters, after `type(scope): `. The ` (#123)` suffix of a squash merge does not count. |
 | `ci.commits.scopes.changelog` | `[]` | Scopes allowed on bumping types, in changelog order. Empty allows any scope on any type. |
 | `ci.commits.scopes.other` | `[]` | Scopes allowed only on non-bumping types. The PR-title check and commitlint reject e.g. `feat(nix)`; the changelog drops entries with these scopes and they do not bump the version. |
 | `ci.commits.featDisallowedVerbs` | `["improve" "refine" "tweak" "cleanup" "clean up" "polish" "adjust" …]` | Leading words rejected on `feat` descriptions when `improvement` is an allowed type (warns on `--squash-merged`). Set to `[]` to disable. |
-| `ci.commits.nonShippedPaths` | `[]` | Shell glob patterns for paths that ship nothing. When non-empty, `PR title lint` rejects changelog types on pull requests whose changed files all match a pattern. |
+| `ci.commits.nonShippedPaths` | `[]` | Shell glob patterns for paths that ship nothing. When non-empty, `PR title lint` rejects changelog types on pull requests whose changed files all match a pattern, and posts a notice on a non-bumping type when a changed file matches none. |
 | `ci.signoff.enable` | `true` | `signoff` package and app. |
 | `ci.signoff.skipChecks` | `[]` | `checks` attributes `signoff` does not build; `nix flake check` and main's workflow still build them. |
 | `ci.github.enable` | `true` | Generated workflows. |

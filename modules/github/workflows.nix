@@ -222,7 +222,7 @@
     schedule,
     appToken,
   }: let
-    title = "chore: update ${input}";
+    title = "build: update ${input}";
   in {
     name = "Update ${input}";
     on = {

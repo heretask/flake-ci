@@ -51,7 +51,7 @@ in {
       "feature(api): x" = ''unknown type "feature"'';
       "fix(): x" = ''empty scope'';
       "fix(other): x" = ''unknown scope "other". Allowed scopes: api app ci'';
-      "feat(ci): x" = ''use a type without a changelog entry, e.g. "chore(ci): x"'';
+      "feat(ci): x" = ''use the type without a changelog entry that fits: build (dependencies, toolchain, packaging and build configuration), chore (only when no other type fits), ci ('';
       "feat: improve patient navigation" = ''Use "improvement: improve patient navigation"'';
       "feat(app): Clean up old banner" = ''Use "improvement(app): Clean up old banner"'';
       "fix(api):  " = ''description after ": " is empty'';
@@ -182,15 +182,23 @@ in {
               exit 1
             fi
             grep -qF '::error title=Non-shipped PR using changelog type::' path_out
+            grep -qF 'Use the type without a changelog entry that fits: build (' path_out
 
             PR_TITLE="feat: add demo patients" LIVE_TITLE="feat: add demo patients" PR_FILES=$'README.md\napi/priv/seed/demo.json' REPORT=true ${titleLint} >path_out
             grep -qx 'state=failure' "$TMPDIR/status"
 
-            PR_TITLE="chore: update demo patients" PR_FILES=$'README.md\napi/priv/seed/demo.json' ENFORCE=true ${titleLint}
+            output=$(PR_TITLE="chore: update demo patients" PR_FILES=$'README.md\napi/priv/seed/demo.json' ENFORCE=true ${titleLint})
+            test -z "$output"
 
             # 4. A PR with at least one shipped file passes and emits the minor bump notice.
             output=$(PR_TITLE="feat(app): add calendar view" PR_FILES=$'README.md\napp/src/Calendar.vue' ENFORCE=true ${titleLint})
             grep -qF '::notice title=Minor version bump::' <<<"$output"
+
+            # 5. A non-changelog title on a PR that changes a shipped file passes with a notice naming the file.
+            : >"$GITHUB_STEP_SUMMARY"
+            output=$(PR_TITLE="chore(api): update plug" PR_FILES=$'README.md\napi/mix.lock' ENFORCE=true ${titleLint})
+            grep -qF '::notice title=No changelog entry::' <<<"$output"
+            grep -qF 'such as `api/mix.lock`' "$GITHUB_STEP_SUMMARY"
 
             touch "$out"
           '';

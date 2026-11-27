@@ -22,7 +22,7 @@ jobs:
       with:
         base: main
         branch: automation/nixpkgs
-        commit-msg: 'chore: update nixpkgs'
+        commit-msg: 'build: update nixpkgs'
         inputs: nixpkgs
         nix-options: --option accept-flake-config false
         pr-body: |-
@@ -31,7 +31,7 @@ jobs:
           This PR is refreshed automatically. Make fixes in a separate PR to `main`.
 
           Approve workflow runs when prompted, then run the normal checks and merge manually.
-        pr-title: 'chore: update nixpkgs'
+        pr-title: 'build: update nixpkgs'
     timeout-minutes: 15
 name: Update nixpkgs
 'on':

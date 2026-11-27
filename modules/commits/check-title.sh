@@ -1,6 +1,6 @@
 # check_title TITLE [--squash-merged]
 # Expects changelog_types, other_types, changelog_scopes, other_scopes,
-# feat_disallowed_verbs (arrays) and max_length.
+# feat_disallowed_verbs (arrays), other_types_help and max_length.
 check_title() {
   local title=$1 squash_merged=${2-}
   local all_types=("${changelog_types[@]}" "${other_types[@]}")
@@ -37,8 +37,8 @@ check_title() {
       return 1
     fi
     if [[ " ${changelog_types[*]} " == *" $type "* && " ${changelog_scopes[*]} " != *" $scope "* ]]; then
-      printf '"%s": "%s" adds a changelog entry, but "%s" changes ship nothing. Changelog types take %s, or no scope. If nothing shipped changed, use a type without a changelog entry, e.g. "chore(%s): %s".\n' \
-        "$title" "$type" "$scope" "${changelog_scopes[*]}" "$scope" "$description" >&2
+      printf '"%s": "%s" adds a changelog entry, but "%s" changes ship nothing. Changelog types take %s, or no scope. If nothing shipped changed, use the type without a changelog entry that fits: %s.\n' \
+        "$title" "$type" "$scope" "${changelog_scopes[*]}" "$other_types_help" >&2
       return 1
     fi
   fi

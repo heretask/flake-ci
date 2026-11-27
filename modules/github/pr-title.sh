@@ -2,7 +2,7 @@
 # REPORT=true also posts the result as the `PR title lint` commit status on HEAD_SHA, and lints the
 # title the pull request has now: the event's title is stale in a re-run, and when the title was
 # edited after the push. It needs GH_TOKEN and PR_NUMBER. ENFORCE=true fails on an invalid title.
-# Expects minor_types and non_shipped_paths (arrays) in addition to check_title's arrays.
+# Expects minor_types and non_shipped_paths (arrays) in addition to what check_title expects.
 title=$PR_TITLE
 if [[ ${REPORT-} == true ]]; then
   title=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq .title) || title=$PR_TITLE
@@ -22,11 +22,12 @@ if [[ $state == success ]]; then
     type=${BASH_REMATCH[1]}
     breaking=${BASH_REMATCH[4]}
 
-    if ((${#non_shipped_paths[@]} > 0)) && [[ " ${changelog_types[*]} " == *" $type "* ]]; then
+    # The first changed file that matches no non-shipped pattern; empty when all of them match.
+    first_shipped=
+    file_count=0
+    if ((${#non_shipped_paths[@]} > 0)); then
       if files_out=$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files" --jq '.[].filename'); then
         mapfile -t files <<<"$files_out"
-        shipped_found=false
-        file_count=0
         for f in "${files[@]}"; do
           [[ -n $f ]] || continue
           file_count=$((file_count + 1))
@@ -39,17 +40,18 @@ if [[ $state == success ]]; then
             fi
           done
           if ! $matched; then
-            shipped_found=true
+            first_shipped=$f
             break
           fi
         done
-        if ((file_count > 0)) && ! $shipped_found; then
-          problem="\"$title\": \"$type\" adds a changelog entry and bumps the version, but every changed file matches ci.commits.nonShippedPaths. Use a non-changelog type such as \"chore\", \"docs\", \"test\", or \"ci\"."
-          printf '::error title=Non-shipped PR using changelog type::%s\n' "$problem"
-          state=failure
-          description=$problem
-        fi
       fi
+    fi
+
+    if [[ " ${changelog_types[*]} " == *" $type "* ]] && ((file_count > 0)) && [[ -z $first_shipped ]]; then
+      problem="\"$title\": \"$type\" adds a changelog entry and bumps the version, but every changed file matches ci.commits.nonShippedPaths. Use the type without a changelog entry that fits: $other_types_help."
+      printf '::error title=Non-shipped PR using changelog type::%s\n' "$problem"
+      state=failure
+      description=$problem
     fi
 
     if [[ $state == success ]]; then
@@ -64,6 +66,12 @@ if [[ $state == success ]]; then
         printf '::notice title=Minor version bump::%s\n' "$msg"
         if [[ -n ${GITHUB_STEP_SUMMARY-} ]]; then
           printf '### Version bump\n\n%s\n' "$msg" >>"$GITHUB_STEP_SUMMARY"
+        fi
+      elif [[ " ${other_types[*]} " == *" $type "* && -n $first_shipped ]]; then
+        msg="This PR title (\"$title\") uses \`$type\`, which adds no changelog entry and no version bump, but the PR changes files that ship, such as \`$first_shipped\`. If it alters what ships, use a changelog type (${changelog_types[*]})."
+        printf '::notice title=No changelog entry::%s\n' "$msg"
+        if [[ -n ${GITHUB_STEP_SUMMARY-} ]]; then
+          printf '### No changelog entry\n\n%s\n' "$msg" >>"$GITHUB_STEP_SUMMARY"
         fi
       fi
     fi
